@@ -115,4 +115,41 @@ end
 
 ## OpenTelemetry
 
-When `opentelemetry-api` is loaded, each LLM call emits an `axn_ruby_llm.ask` span (child of the `axn.call` span) with `llm.model` and `llm.json_mode` attributes, plus `llm.input_tokens` and `llm.output_tokens` when the provider returns them. No configuration required — OTel is feature-detected at runtime.
+Tracing is provided by thoughtbot's [`opentelemetry-instrumentation-ruby_llm`](https://github.com/thoughtbot/opentelemetry-instrumentation-ruby_llm), which patches `RubyLLM::Chat#complete` and `RubyLLM::Embedding` with standard `gen_ai.*` GenAI semantic-convention attributes. Spans cover every `RubyLLM.chat` caller (not just `Ask`), tool calls, and embeddings.
+
+By default the instrumentation **auto-installs** when `OpenTelemetry::SDK` is loaded — the host app does not need to add a `c.use` line to its `OpenTelemetry::SDK.configure` block.
+
+```ruby
+Axn::RubyLLM.configure do |c|
+  c.opentelemetry = :auto # default — install when OpenTelemetry::SDK is defined
+  # c.opentelemetry = true  # force install
+  # c.opentelemetry = false # disable auto-install (host can still `c.use` it themselves)
+end
+```
+
+Emitted attributes include `gen_ai.operation.name`, `gen_ai.provider.name`, `gen_ai.request.model`, `gen_ai.response.model`, `gen_ai.usage.input_tokens`, and `gen_ai.usage.output_tokens`. Set `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true` to also capture system/input/output messages (PII risk — opt in deliberately).
+
+## Production gating
+
+Set `Configuration#enabled` to gate LLM calls — useful for skipping spend in non-production environments. Accepts a Boolean or a callable (evaluated per call):
+
+```ruby
+Axn::RubyLLM.configure do |c|
+  c.enabled = -> { Rails.env.production? }
+  # c.enabled = false  # always stub
+  # c.enabled = true   # default; always run
+end
+```
+
+When disabled, `Ask` returns a **success** result with empty stub content, so callers don't need per-callsite branching:
+
+| Field | Stubbed value |
+|---|---|
+| `response` | `""` (plain) / `{}` (`json: true` or `schema:`) |
+| `raw_message` | `nil` |
+| `input_tokens` / `output_tokens` | `0` |
+| `cost` | `0.0` |
+| `cost_breakdown` | `nil` |
+| `stubbed` | `true` |
+
+Check `result.stubbed` if you need to branch on it (e.g. skip downstream writes that would otherwise persist empty LLM output). A log line `"LLM call disabled; returning stub response"` is emitted at INFO under the standard `[Axn::RubyLLM::Ask]` log prefix.
