@@ -12,13 +12,15 @@ module Axn
       expects :system_prompt, optional: true
       expects :temperature, optional: true
 
-      exposes :response, allow_blank: true
-      exposes :raw_message, allow_nil: true
+      exposes :response
+      exposes :raw_message
       exposes :input_tokens, allow_nil: true
       exposes :output_tokens, allow_nil: true
       exposes :cost, allow_nil: true
       exposes :cost_breakdown, allow_nil: true
       exposes :stubbed, type: :boolean, default: false
+
+      StubMessage = Data.define(:content, :input_tokens, :output_tokens, :model_id)
 
       error prefix: "LLM request failed: "
       error "Failed to parse JSON from LLM response", if: JSON::ParserError
@@ -47,9 +49,10 @@ module Axn
       def disabled? = !Axn::RubyLLM.configuration.enabled?
 
       def stubbed_exposures
+        content = schema || json ? { "stubbed" => true } : "stubbed response value"
         {
-          response: schema || json ? {} : "",
-          raw_message: nil,
+          response: content,
+          raw_message: StubMessage.new(content:, input_tokens: 0, output_tokens: 0, model_id: "stubbed"),
           input_tokens: 0,
           output_tokens: 0,
           cost: 0.0,

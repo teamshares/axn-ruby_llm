@@ -255,9 +255,10 @@ RSpec.describe Axn::RubyLLM::Ask do
       end
 
       it "exposes a stub response and stubbed flag" do
-        expect(result.response).to eq("")
+        expect(result.response).to eq("stubbed response value")
         expect(result.stubbed).to eq(true)
-        expect(result.raw_message).to be_nil
+        expect(result.raw_message.content).to eq("stubbed response value")
+        expect(result.raw_message.model_id).to eq("stubbed")
         expect(result.input_tokens).to eq(0)
         expect(result.output_tokens).to eq(0)
         expect(result.cost).to eq(0.0)
@@ -288,8 +289,8 @@ RSpec.describe Axn::RubyLLM::Ask do
       let(:params) { { prompt:, json: true } }
       before { Axn::RubyLLM.configure { |c| c.enabled = false } }
 
-      it "stubs with an empty Hash" do
-        expect(result.response).to eq({})
+      it "stubs with a non-empty Hash" do
+        expect(result.response).to eq({ "stubbed" => true })
         expect(result.stubbed).to eq(true)
       end
     end
@@ -299,8 +300,8 @@ RSpec.describe Axn::RubyLLM::Ask do
       let(:params) { { prompt:, schema: schema_class } }
       before { Axn::RubyLLM.configure { |c| c.enabled = false } }
 
-      it "stubs with an empty Hash" do
-        expect(result.response).to eq({})
+      it "stubs with a non-empty Hash" do
+        expect(result.response).to eq({ "stubbed" => true })
         expect(result.stubbed).to eq(true)
       end
     end

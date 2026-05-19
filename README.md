@@ -141,15 +141,15 @@ Axn::RubyLLM.configure do |c|
 end
 ```
 
-When disabled, `Ask` returns a **success** result with empty stub content, so callers don't need per-callsite branching:
+When disabled, `Ask` returns a **success** result with obvious stub content, so callers don't need per-callsite branching:
 
 | Field | Stubbed value |
 |---|---|
-| `response` | `""` (plain) / `{}` (`json: true` or `schema:`) |
-| `raw_message` | `nil` |
+| `response` | `"stubbed response value"` (plain) / `{ "stubbed" => true }` (`json: true` or `schema:`) |
+| `raw_message` | `Ask::StubMessage` Data instance with `.content`, `.input_tokens`, `.output_tokens`, `.model_id` |
 | `input_tokens` / `output_tokens` | `0` |
 | `cost` | `0.0` |
 | `cost_breakdown` | `nil` |
 | `stubbed` | `true` |
 
-Check `result.stubbed` if you need to branch on it (e.g. skip downstream writes that would otherwise persist empty LLM output). A log line `"LLM call disabled; returning stub response"` is emitted at INFO under the standard `[Axn::RubyLLM::Ask]` log prefix.
+Check `result.stubbed` if you need to branch on it (e.g. skip downstream writes that would otherwise persist stub LLM output). The Axn result's `message` is `"disabled - returning stubbed values"` for the same purpose.
