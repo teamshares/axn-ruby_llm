@@ -23,8 +23,8 @@ module Axn
         @configuration = nil
       end
 
-      def ask(**kwargs) = Ask.call(**kwargs)
-      def ask!(**kwargs) = Ask.call!(**kwargs)
+      def ask(**) = Ask.call(**)
+      def ask!(**) = Ask.call!(**)
     end
   end
 end

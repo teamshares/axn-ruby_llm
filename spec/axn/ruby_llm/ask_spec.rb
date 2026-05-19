@@ -7,7 +7,20 @@ RSpec.describe Axn::RubyLLM::Ask do
   let(:params) { { prompt: } }
 
   let(:llm_response_content) { "Here is the summary." }
-  let(:llm_response) { instance_double(RubyLLM::Message, content: llm_response_content) }
+  let(:llm_input_tokens) { 12 }
+  let(:llm_output_tokens) { 34 }
+  let(:llm_model_id) { "gpt-4o-mini" }
+  let(:llm_cost) { instance_double(RubyLLM::Cost, total: 0.00056) }
+  let(:llm_model_info) { instance_double("RubyLLM::Model") }
+  let(:llm_response) do
+    instance_double(
+      RubyLLM::Message,
+      content: llm_response_content,
+      input_tokens: llm_input_tokens,
+      output_tokens: llm_output_tokens,
+      model_id: llm_model_id,
+    )
+  end
   let(:chat_instance) { instance_double(RubyLLM::Chat) }
 
   before do
@@ -15,6 +28,8 @@ RSpec.describe Axn::RubyLLM::Ask do
     allow(chat_instance).to receive(:with_instructions).and_return(chat_instance)
     allow(chat_instance).to receive(:with_params).and_return(chat_instance)
     allow(chat_instance).to receive(:ask).with(prompt).and_return(llm_response)
+    allow(RubyLLM.models).to receive(:find).with(llm_model_id).and_return(llm_model_info)
+    allow(llm_response).to receive(:cost).with(model: llm_model_info).and_return(llm_cost)
   end
 
   context "with default params (json: false)" do
@@ -88,27 +103,15 @@ RSpec.describe Axn::RubyLLM::Ask do
     end
   end
 
-  context "when the daily token limit is hit" do
+  context "when the provider raises a rate limit error" do
     before do
-      allow(chat_instance).to receive(:ask).and_raise(StandardError.new("tokens_usage_based per day limit exceeded"))
+      allow(chat_instance).to receive(:ask).and_raise(RubyLLM::RateLimitError.new("429 Too Many Requests"))
     end
 
     it "fails with a rate limit message" do
       expect(result).not_to be_ok
-      expect(result.error).to include("Daily token limit reached")
-      expect(result.error).to include("tokens_usage_based per day limit exceeded")
-    end
-
-    context "with a custom rate_limit_phrase" do
-      before do
-        Axn::RubyLLM.configure { |c| c.rate_limit_phrase = "rate limit exceeded" }
-        allow(chat_instance).to receive(:ask).and_raise(StandardError.new("rate limit exceeded for this org"))
-      end
-
-      it "respects the configured phrase" do
-        expect(result).not_to be_ok
-        expect(result.error).to include("Daily token limit reached")
-      end
+      expect(result.error).to include("Rate limit reached")
+      expect(result.error).to include("429 Too Many Requests")
     end
   end
 
@@ -130,6 +133,50 @@ RSpec.describe Axn::RubyLLM::Ask do
     it "fails with the JSON parse error message" do
       expect(result).not_to be_ok
       expect(result.error).to eq("Failed to parse JSON from LLM response")
+    end
+  end
+
+  describe "token counts and cost" do
+    it "exposes input_tokens and output_tokens from the LLM response" do
+      expect(result.input_tokens).to eq(12)
+      expect(result.output_tokens).to eq(34)
+    end
+
+    it "exposes total cost as a Float via cost" do
+      expect(result.cost).to eq(0.00056)
+    end
+
+    it "exposes the full Cost struct via cost_breakdown" do
+      expect(result.cost_breakdown).to eq(llm_cost)
+    end
+
+    context "when RubyLLM has no pricing for the model" do
+      before do
+        allow(RubyLLM.models).to receive(:find).with(llm_model_id).and_return(nil)
+      end
+
+      it "still succeeds with nil cost fields" do
+        expect(result).to be_ok
+        expect(result.cost).to be_nil
+        expect(result.cost_breakdown).to be_nil
+      end
+
+      it "still exposes token counts" do
+        expect(result.input_tokens).to eq(12)
+        expect(result.output_tokens).to eq(34)
+      end
+    end
+
+    context "when RubyLLM.models.find raises" do
+      before do
+        allow(RubyLLM.models).to receive(:find).with(llm_model_id).and_raise(StandardError.new("registry boom"))
+      end
+
+      it "treats missing model info as nil cost" do
+        expect(result).to be_ok
+        expect(result.cost).to be_nil
+        expect(result.cost_breakdown).to be_nil
+      end
     end
   end
 

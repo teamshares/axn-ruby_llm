@@ -13,22 +13,43 @@ module Axn
 
       exposes :response
       exposes :raw_message
+      exposes :input_tokens, allow_nil: true
+      exposes :output_tokens, allow_nil: true
+      exposes :cost, allow_nil: true
+      exposes :cost_breakdown, allow_nil: true
 
       error prefix: "LLM request failed: "
       error "Failed to parse JSON from LLM response", if: JSON::ParserError
 
       def call
-        expose response: parsed_response, raw_message: llm_response
-      rescue StandardError => e
-        fail! "Daily token limit reached: #{e.message}" if rate_limited?(e)
-
-        raise e
+        expose(
+          response: parsed_response,
+          raw_message: llm_response,
+          input_tokens: llm_response.input_tokens,
+          output_tokens: llm_response.output_tokens,
+          cost_breakdown:,
+          cost: cost_breakdown&.total,
+        )
+      rescue ::RubyLLM::RateLimitError => e
+        fail! "Rate limit reached: #{e.message}"
       end
 
       private
 
       def parsed_response
         json ? JSON.parse(llm_response.content) : llm_response.content
+      end
+
+      def cost_breakdown
+        return nil unless model_info
+
+        llm_response.cost(model: model_info)
+      end
+
+      memo def model_info
+        ::RubyLLM.models.find(llm_response.model_id)
+      rescue StandardError
+        nil
       end
 
       memo def llm_response
@@ -45,10 +66,6 @@ module Axn
 
       def resolved_model
         model || Axn::RubyLLM.configuration.default_model
-      end
-
-      def rate_limited?(error)
-        error.message.include?(Axn::RubyLLM.configuration.rate_limit_phrase)
       end
     end
   end

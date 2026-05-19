@@ -22,8 +22,7 @@ Optionally configure gem-level defaults:
 
 ```ruby
 Axn::RubyLLM.configure do |c|
-  c.default_model = "gpt-4o-mini"          # default
-  c.rate_limit_phrase = "tokens_usage_based per day"  # OpenAI default; override for other providers
+  c.default_model = "gpt-4o-mini" # default
 end
 ```
 
@@ -53,9 +52,30 @@ result = Axn::RubyLLM.ask(
 
 The underlying action class is available as `Axn::RubyLLM::Ask` for cases where you need the full `Axn` interface (`call!`, `call_async`, instrumentation hooks, etc.).
 
+### Token counts and cost
+
+Every successful result exposes token usage and cost in two tiers:
+
+```ruby
+result = Axn::RubyLLM.ask(prompt: "...")
+
+# Flat (common case)
+result.input_tokens    # => 412
+result.output_tokens   # => 78
+result.cost            # => 0.00056 (Float USD total; nil if RubyLLM has no pricing for the model)
+
+# Resolved breakdown — RubyLLM::Cost struct
+result.cost_breakdown  # => #<Cost input: 0.0004, output: 0.00016, cache_read: 0.0, ..., total: 0.00056>
+
+# Full escape hatch — the raw RubyLLM::Message for cache/thinking tokens, etc.
+result.raw_message     # => #<RubyLLM::Message ...>
+```
+
+`cost` and `cost_breakdown` are both `nil` when RubyLLM lacks pricing for the model (e.g. unknown/custom endpoints). Token counts are nil only if the provider did not return them.
+
 Errors are handled via Axn's declarative `error` DSL:
 - `JSON::ParserError` → result fails with `"Failed to parse JSON from LLM response"`
-- Configured rate-limit phrase in error message → result fails with `"Daily token limit reached: ..."`
+- `RubyLLM::RateLimitError` (HTTP 429, provider-agnostic) → result fails with `"Rate limit reached: <message>"`
 - Any other `StandardError` → result fails with `"LLM request failed: <message>"`
 
 ## Testing
@@ -74,4 +94,4 @@ end
 
 ## OpenTelemetry
 
-When `opentelemetry-api` is loaded, each LLM call emits an `axn_ruby_llm.ask` span (child of the `axn.call` span) with `llm.model` and `llm.json_mode` attributes. No configuration required — OTel is feature-detected at runtime.
+When `opentelemetry-api` is loaded, each LLM call emits an `axn_ruby_llm.ask` span (child of the `axn.call` span) with `llm.model` and `llm.json_mode` attributes, plus `llm.input_tokens` and `llm.output_tokens` when the provider returns them. No configuration required — OTel is feature-detected at runtime.
