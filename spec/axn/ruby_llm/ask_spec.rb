@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-RSpec.describe Axn::RubyLLM::Actions::Ask do
+RSpec.describe Axn::RubyLLM::Ask do
   subject(:result) { described_class.call(**params) }
 
   let(:prompt) { "Summarize this thread." }
@@ -130,6 +130,18 @@ RSpec.describe Axn::RubyLLM::Actions::Ask do
     it "fails with the JSON parse error message" do
       expect(result).not_to be_ok
       expect(result.error).to eq("Failed to parse JSON from LLM response")
+    end
+  end
+
+  describe "Axn::RubyLLM.ask shortcut" do
+    it "delegates to Ask.call" do
+      result = Axn::RubyLLM.ask(prompt:)
+      expect(result).to be_ok
+      expect(result.response).to eq("Here is the summary.")
+    end
+
+    it "exposes ask! that delegates to Ask.call!" do
+      expect(Axn::RubyLLM.ask!(prompt:).response).to eq("Here is the summary.")
     end
   end
 end

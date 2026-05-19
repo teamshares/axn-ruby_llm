@@ -30,26 +30,28 @@ end
 ## Usage
 
 ```ruby
-result = Axn::RubyLLM::Actions::Ask.call(
+result = Axn::RubyLLM.ask(
   prompt: "Summarize this Slack thread: #{thread_text}"
 )
 result.response  # => "The team decided to..."
 
 # JSON mode
-result = Axn::RubyLLM::Actions::Ask.call(
+result = Axn::RubyLLM.ask(
   prompt: build_extraction_prompt(doc),
   json: true
 )
 result.response  # => { "company" => "Acme", "founded" => 1999 }
 
 # With system prompt and model override
-result = Axn::RubyLLM::Actions::Ask.call(
+result = Axn::RubyLLM.ask(
   prompt: user_message,
   system_prompt: "You are a concise financial analyst.",
   model: "gpt-4o",
   temperature: 0.2
 )
 ```
+
+The underlying action class is available as `Axn::RubyLLM::Ask` for cases where you need the full `Axn` interface (`call!`, `call_async`, instrumentation hooks, etc.).
 
 Errors are handled via Axn's declarative `error` DSL:
 - `JSON::ParserError` → result fails with `"Failed to parse JSON from LLM response"`
@@ -65,7 +67,7 @@ require "axn/ruby_llm/rspec"
 
 it "summarizes the thread" do
   stub_axn_ruby_llm(response: "The team agreed to ship on Friday.")
-  result = Axn::RubyLLM::Actions::Ask.call(prompt: "...")
+  result = Axn::RubyLLM.ask(prompt: "...")
   expect(result.response).to include("ship on Friday")
 end
 ```

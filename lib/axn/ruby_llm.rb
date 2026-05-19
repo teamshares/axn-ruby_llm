@@ -6,7 +6,7 @@ require "ruby_llm"
 require_relative "ruby_llm/version"
 require_relative "ruby_llm/configuration"
 require_relative "ruby_llm/instrumentation"
-require_relative "ruby_llm/actions/ask"
+require_relative "ruby_llm/ask"
 
 module Axn
   module RubyLLM
@@ -22,6 +22,9 @@ module Axn
       def reset_configuration!
         @configuration = nil
       end
+
+      def ask(**kwargs) = Ask.call(**kwargs)
+      def ask!(**kwargs) = Ask.call!(**kwargs)
     end
   end
 end
