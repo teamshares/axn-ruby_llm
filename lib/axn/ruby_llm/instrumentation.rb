@@ -2,36 +2,31 @@
 
 module Axn
   module RubyLLM
+    # Auto-installs thoughtbot's opentelemetry-instrumentation-ruby_llm patches
+    # so the host app doesn't have to add `c.use 'OpenTelemetry::Instrumentation::RubyLLM'`
+    # to their OpenTelemetry::SDK.configure block. Idempotent.
     module Instrumentation
       class << self
-        def tracer
-          return nil unless defined?(OpenTelemetry)
+        def maybe_install
+          return if @installed
+          return unless install?
 
-          current_provider = OpenTelemetry.tracer_provider
-          return @tracer if defined?(@tracer) && defined?(@tracer_provider) && @tracer_provider == current_provider
-
-          @tracer_provider = current_provider
-          @tracer = current_provider.tracer("axn-ruby_llm", Axn::RubyLLM::VERSION)
+          require "opentelemetry/instrumentation/ruby_llm"
+          ::OpenTelemetry::Instrumentation::RubyLLM::Instrumentation.instance.install({})
+          @installed = true
         end
 
-        def trace_ask(model:, json:)
-          t = tracer
-          return yield unless t
-
-          t.in_span("axn_ruby_llm.ask", attributes: { "llm.model" => model, "llm.json_mode" => json }) do |span|
-            yield.tap { |message| record_usage(span, message) }
-          end
+        def reset!
+          @installed = nil
         end
 
         private
 
-        def record_usage(span, message)
-          return unless message.respond_to?(:input_tokens)
-
-          span.set_attribute("llm.input_tokens", message.input_tokens) if message.input_tokens
-          span.set_attribute("llm.output_tokens", message.output_tokens) if message.output_tokens
-        rescue StandardError
-          # Instrumentation must never break the call
+        def install?
+          case Axn::RubyLLM.configuration.opentelemetry
+          when :auto then defined?(::OpenTelemetry::SDK)
+          else !!Axn::RubyLLM.configuration.opentelemetry
+          end
         end
       end
     end

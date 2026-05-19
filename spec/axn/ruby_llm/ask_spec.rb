@@ -32,6 +32,11 @@ RSpec.describe Axn::RubyLLM::Ask do
     allow(llm_response).to receive(:cost).with(model: llm_model_info).and_return(llm_cost)
   end
 
+  after do
+    Axn::RubyLLM.reset_configuration!
+    Axn::RubyLLM::Instrumentation.reset!
+  end
+
   context "with default params (json: false)" do
     it "returns raw text response" do
       expect(result).to be_ok
@@ -233,6 +238,132 @@ RSpec.describe Axn::RubyLLM::Ask do
 
     it "exposes ask! that delegates to Ask.call!" do
       expect(Axn::RubyLLM.ask!(prompt:).response).to eq("Here is the summary.")
+    end
+
+    it "exposes stubbed=false on normal calls" do
+      expect(Axn::RubyLLM.ask(prompt:).stubbed).to eq(false)
+    end
+  end
+
+  describe "production gating via configuration.enabled" do
+    context "when enabled = false" do
+      before { Axn::RubyLLM.configure { |c| c.enabled = false } }
+
+      it "returns a success result without touching RubyLLM" do
+        expect(RubyLLM).not_to receive(:chat)
+        expect(result).to be_ok
+      end
+
+      it "exposes a stub response and stubbed flag" do
+        expect(result.response).to eq("stubbed response value")
+        expect(result.stubbed).to eq(true)
+        expect(result.raw_message.content).to eq("stubbed response value")
+        expect(result.raw_message.model_id).to eq("stubbed")
+        expect(result.input_tokens).to eq(0)
+        expect(result.output_tokens).to eq(0)
+        expect(result.cost).to eq(0.0)
+        expect(result.cost_breakdown).to be_nil
+      end
+    end
+
+    context "when enabled = -> { false }" do
+      before { Axn::RubyLLM.configure { |c| c.enabled = -> { false } } }
+
+      it "stubs the call" do
+        expect(result).to be_ok
+        expect(result.stubbed).to eq(true)
+      end
+    end
+
+    context "when enabled = -> { true }" do
+      before { Axn::RubyLLM.configure { |c| c.enabled = -> { true } } }
+
+      it "runs the normal call path" do
+        expect(result).to be_ok
+        expect(result.stubbed).to eq(false)
+        expect(result.response).to eq("Here is the summary.")
+      end
+    end
+
+    context "with json: true while disabled" do
+      let(:params) { { prompt:, json: true } }
+      before { Axn::RubyLLM.configure { |c| c.enabled = false } }
+
+      it "stubs with a non-empty Hash" do
+        expect(result.response).to eq({ "stubbed" => true })
+        expect(result.stubbed).to eq(true)
+      end
+    end
+
+    context "with a schema while disabled" do
+      let(:schema_class) { Class.new }
+      let(:params) { { prompt:, schema: schema_class } }
+      before { Axn::RubyLLM.configure { |c| c.enabled = false } }
+
+      it "stubs with a non-empty Hash" do
+        expect(result.response).to eq({ "stubbed" => true })
+        expect(result.stubbed).to eq(true)
+      end
+    end
+  end
+end
+
+RSpec.describe Axn::RubyLLM::Instrumentation do
+  let(:install_target) { Class.new { def install(_opts); end }.new }
+
+  before do
+    allow(described_class).to receive(:require).with("opentelemetry/instrumentation/ruby_llm")
+    target = install_target
+    fake_singleton = Class.new
+    fake_singleton.define_singleton_method(:instance) { target }
+    stub_const("OpenTelemetry::Instrumentation::RubyLLM::Instrumentation", fake_singleton)
+  end
+
+  after do
+    Axn::RubyLLM.reset_configuration!
+    described_class.reset!
+  end
+
+  context "when configuration.opentelemetry = false" do
+    before { Axn::RubyLLM.configure { |c| c.opentelemetry = false } }
+
+    it "does not install the upstream instrumentation" do
+      expect(install_target).not_to receive(:install)
+      described_class.maybe_install
+    end
+  end
+
+  context "when configuration.opentelemetry = :auto and OpenTelemetry::SDK is not defined" do
+    before do
+      Axn::RubyLLM.configure { |c| c.opentelemetry = :auto }
+      hide_const("OpenTelemetry::SDK") if defined?(OpenTelemetry::SDK)
+    end
+
+    it "does not install" do
+      expect(install_target).not_to receive(:install)
+      described_class.maybe_install
+    end
+  end
+
+  context "when configuration.opentelemetry = true (force install)" do
+    before { Axn::RubyLLM.configure { |c| c.opentelemetry = true } }
+
+    it "installs exactly once across multiple invocations" do
+      expect(install_target).to receive(:install).with({}).once
+      described_class.maybe_install
+      described_class.maybe_install
+    end
+  end
+
+  context "when configuration.opentelemetry = :auto and OpenTelemetry::SDK is defined" do
+    before do
+      Axn::RubyLLM.configure { |c| c.opentelemetry = :auto }
+      stub_const("OpenTelemetry::SDK", Module.new) unless defined?(OpenTelemetry::SDK)
+    end
+
+    it "installs the upstream instrumentation" do
+      expect(install_target).to receive(:install).with({}).once
+      described_class.maybe_install
     end
   end
 end

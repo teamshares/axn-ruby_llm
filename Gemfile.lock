@@ -3,6 +3,7 @@ PATH
   specs:
     axn-ruby_llm (0.1.0)
       axn (>= 0.1.0.pre.alpha.4.2, < 0.2.0)
+      opentelemetry-instrumentation-ruby_llm (>= 0.5, < 1.0)
       ruby_llm (>= 1.0, < 2.0)
 
 GEM
@@ -57,6 +58,19 @@ GEM
     multipart-post (2.4.1)
     net-http (0.9.1)
       uri (>= 0.11.1)
+    opentelemetry-api (1.8.0)
+      logger
+    opentelemetry-common (0.23.0)
+      opentelemetry-api (~> 1.0)
+    opentelemetry-instrumentation-base (0.25.0)
+      opentelemetry-api (~> 1.7)
+      opentelemetry-common (~> 0.21)
+      opentelemetry-registry (~> 0.1)
+    opentelemetry-instrumentation-ruby_llm (0.5.0)
+      opentelemetry-api (~> 1.0)
+      opentelemetry-instrumentation-base (~> 0.23)
+    opentelemetry-registry (0.4.0)
+      opentelemetry-api (~> 1.1)
     parallel (1.28.0)
     parser (3.3.11.1)
       ast (~> 2.4.1)

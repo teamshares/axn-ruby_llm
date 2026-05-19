@@ -18,9 +18,17 @@ module Axn
       exposes :output_tokens, allow_nil: true
       exposes :cost, allow_nil: true
       exposes :cost_breakdown, allow_nil: true
+      exposes :stubbed, type: :boolean, default: false
+
+      StubMessage = Data.define(:content, :input_tokens, :output_tokens, :model_id)
 
       error prefix: "LLM request failed: "
       error "Failed to parse JSON from LLM response", if: JSON::ParserError
+
+      before do
+        Instrumentation.maybe_install
+        done!("disabled - returning stubbed values", **stubbed_exposures) if disabled?
+      end
 
       def call
         expose(
@@ -30,12 +38,28 @@ module Axn
           output_tokens: llm_response.output_tokens,
           cost_breakdown:,
           cost: cost_breakdown&.total,
+          stubbed: false,
         )
       rescue ::RubyLLM::RateLimitError => e
         fail! "Rate limit reached: #{e.message}"
       end
 
       private
+
+      def disabled? = !Axn::RubyLLM.configuration.enabled?
+
+      def stubbed_exposures
+        content = schema || json ? { "stubbed" => true } : "stubbed response value"
+        {
+          response: content,
+          raw_message: StubMessage.new(content:, input_tokens: 0, output_tokens: 0, model_id: "stubbed"),
+          input_tokens: 0,
+          output_tokens: 0,
+          cost: 0.0,
+          cost_breakdown: nil,
+          stubbed: true,
+        }
+      end
 
       def parsed_response
         if schema
@@ -58,9 +82,7 @@ module Axn
         nil
       end
 
-      memo def llm_response
-        Instrumentation.trace_ask(model: resolved_model, json:) { chat.ask(prompt) }
-      end
+      memo def llm_response = chat.ask(prompt)
 
       memo def chat
         ::RubyLLM.chat(model: resolved_model).tap do |c|
