@@ -52,6 +52,26 @@ result = Axn::RubyLLM.ask(
 
 The underlying action class is available as `Axn::RubyLLM::Ask` for cases where you need the full `Axn` interface (`call!`, `call_async`, instrumentation hooks, etc.).
 
+### Structured output via schema
+
+Pass `schema:` to enable provider-enforced structured output (e.g. OpenAI strict mode) via `RubyLLM::Chat#with_schema`. The result's `response` is the parsed Hash.
+
+```ruby
+class CompanyMatch < RubyLLM::Schema
+  integer :company_id, description: "ID of the matched company, or null"
+  number :confidence, description: "0.0–1.0"
+  string :reasoning
+end
+
+result = Axn::RubyLLM.ask(
+  prompt: "Which company is this thread about?\n\n#{thread_text}",
+  schema: CompanyMatch,
+)
+result.response # => { "company_id" => 42, "confidence" => 0.92, "reasoning" => "..." }
+```
+
+`schema:` accepts a [`ruby_llm-schema`](https://github.com/crmne/ruby_llm-schema) class or instance — anything `RubyLLM::Chat#with_schema` accepts, including a raw JSON Schema hash. The `ruby_llm-schema` gem is recommended but not required; declare it in your own Gemfile if you want the DSL. When `schema:` is set, `json: true` is ignored.
+
 ### Token counts and cost
 
 Every successful result exposes token usage and cost in two tiers:
@@ -76,6 +96,7 @@ result.raw_message     # => #<RubyLLM::Message ...>
 Errors are handled via Axn's declarative `error` DSL:
 - `JSON::ParserError` → result fails with `"Failed to parse JSON from LLM response"`
 - `RubyLLM::RateLimitError` (HTTP 429, provider-agnostic) → result fails with `"Rate limit reached: <message>"`
+- `schema:` set but LLM returned non-JSON → result fails with `"Schema response was not valid JSON"`
 - Any other `StandardError` → result fails with `"LLM request failed: <message>"`
 
 ## Testing
