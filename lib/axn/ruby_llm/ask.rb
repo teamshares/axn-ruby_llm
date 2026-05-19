@@ -23,10 +23,12 @@ module Axn
       error prefix: "LLM request failed: "
       error "Failed to parse JSON from LLM response", if: JSON::ParserError
 
-      def call
+      before do
         Instrumentation.maybe_install
-        return expose_stub if disabled?
+        done!("disabled - returning stubbed values", **stubbed_exposures) if disabled?
+      end
 
+      def call
         expose(
           response: parsed_response,
           raw_message: llm_response,
@@ -44,9 +46,8 @@ module Axn
 
       def disabled? = !Axn::RubyLLM.configuration.enabled?
 
-      def expose_stub
-        info "LLM call disabled; returning stub response"
-        expose(
+      def stubbed_exposures
+        {
           response: schema || json ? {} : "",
           raw_message: nil,
           input_tokens: 0,
@@ -54,7 +55,7 @@ module Axn
           cost: 0.0,
           cost_breakdown: nil,
           stubbed: true,
-        )
+        }
       end
 
       def parsed_response
