@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
-require "axn"
 require "ruby_llm"
+require "axn"
 
 require_relative "ruby_llm/version"
 require_relative "ruby_llm/configuration"
