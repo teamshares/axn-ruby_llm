@@ -103,6 +103,50 @@ RSpec.describe Axn::RubyLLM::Ask do
     end
   end
 
+  context "with a schema" do
+    let(:schema_class) { Class.new }
+    let(:llm_response_content) { { "company_id" => 7, "confidence" => 0.9 } }
+    let(:params) { { prompt:, schema: schema_class } }
+
+    before do
+      allow(chat_instance).to receive(:with_schema).with(schema_class).and_return(chat_instance)
+    end
+
+    it "configures chat with the schema and returns the parsed Hash" do
+      expect(chat_instance).to receive(:with_schema).with(schema_class).and_return(chat_instance)
+      expect(result).to be_ok
+      expect(result.response).to eq({ "company_id" => 7, "confidence" => 0.9 })
+    end
+
+    it "does not also force JSON response_format params" do
+      expect(chat_instance).not_to receive(:with_params).with(response_format: anything)
+      result
+    end
+
+    context "when the LLM returns non-JSON despite the schema" do
+      let(:llm_response_content) { "not valid json {broken" }
+
+      it "fails with a schema-specific error" do
+        expect(result).not_to be_ok
+        expect(result.error).to include("Schema response was not valid JSON")
+      end
+    end
+
+    context "with json: true also set" do
+      let(:params) { { prompt:, schema: schema_class, json: true } }
+
+      it "schema wins; response is the Hash, no manual JSON.parse path" do
+        expect(result).to be_ok
+        expect(result.response).to eq({ "company_id" => 7, "confidence" => 0.9 })
+      end
+
+      it "does not configure with_params(response_format:)" do
+        expect(chat_instance).not_to receive(:with_params).with(response_format: anything)
+        result
+      end
+    end
+  end
+
   context "when the provider raises a rate limit error" do
     before do
       allow(chat_instance).to receive(:ask).and_raise(RubyLLM::RateLimitError.new("429 Too Many Requests"))

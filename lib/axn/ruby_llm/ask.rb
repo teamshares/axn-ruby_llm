@@ -7,6 +7,7 @@ module Axn
 
       expects :prompt
       expects :json, type: :boolean, default: false
+      expects :schema, optional: true
       expects :model, optional: true
       expects :system_prompt, optional: true
       expects :temperature, optional: true
@@ -37,6 +38,11 @@ module Axn
       private
 
       def parsed_response
+        if schema
+          return llm_response.content if llm_response.content.is_a?(Hash)
+
+          fail! "Schema response was not valid JSON"
+        end
         json ? JSON.parse(llm_response.content) : llm_response.content
       end
 
@@ -59,7 +65,8 @@ module Axn
       memo def chat
         ::RubyLLM.chat(model: resolved_model).tap do |c|
           c.with_instructions(system_prompt) if system_prompt
-          c.with_params(response_format: { type: "json_object" }) if json
+          c.with_schema(schema) if schema
+          c.with_params(response_format: { type: "json_object" }) if json && !schema
           c.with_params(temperature:) if temperature
         end
       end
