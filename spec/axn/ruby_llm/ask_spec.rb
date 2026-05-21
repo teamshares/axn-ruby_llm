@@ -34,7 +34,6 @@ RSpec.describe Axn::RubyLLM::Ask do
 
   after do
     Axn::RubyLLM.reset_configuration!
-    Axn::RubyLLM::Instrumentation.reset!
   end
 
   context "with default params (json: false)" do
@@ -216,15 +215,26 @@ RSpec.describe Axn::RubyLLM::Ask do
       end
     end
 
-    context "when RubyLLM.models.find raises" do
+    context "when RubyLLM.models.find raises ModelNotFoundError" do
       before do
-        allow(RubyLLM.models).to receive(:find).with(llm_model_id).and_raise(StandardError.new("registry boom"))
+        allow(RubyLLM.models).to receive(:find).with(llm_model_id).and_raise(RubyLLM::ModelNotFoundError.new("registry boom"))
       end
 
       it "treats missing model info as nil cost" do
         expect(result).to be_ok
         expect(result.cost).to be_nil
         expect(result.cost_breakdown).to be_nil
+      end
+    end
+
+    context "when RubyLLM.models.find raises an unexpected StandardError" do
+      before do
+        allow(RubyLLM.models).to receive(:find).with(llm_model_id).and_raise(StandardError.new("registry explosion"))
+      end
+
+      it "propagates as an LLM request failure" do
+        expect(result).not_to be_ok
+        expect(result.error).to eq("LLM request failed: registry explosion")
       end
     end
   end
@@ -308,62 +318,108 @@ RSpec.describe Axn::RubyLLM::Ask do
   end
 end
 
-RSpec.describe Axn::RubyLLM::Instrumentation do
-  let(:install_target) { Class.new { def install(_opts); end }.new }
+RSpec.describe "Axn::RubyLLM::Ask OTel attribute enrichment" do
+  let(:prompt) { "Summarize this." }
+  let(:span_context) { double("SpanContext", valid?: true) }
+  let(:span) do
+    double("Span", context: span_context).tap do |s|
+      allow(s).to receive(:set_attribute)
+    end
+  end
+
+  let(:llm_response) do
+    instance_double(RubyLLM::Message,
+                    content: "summary",
+                    input_tokens: 10,
+                    output_tokens: 5,
+                    model_id: "gpt-4o-mini")
+  end
+  let(:chat_instance) { instance_double(RubyLLM::Chat) }
+
+  # Stub axn's own OTel tracer so that stub_const("OpenTelemetry::Trace") doesn't
+  # cause axn's executor to call OpenTelemetry.tracer_provider on a bare module.
+  let(:axn_span) do
+    double("AxnSpan").tap do |s|
+      allow(s).to receive(:set_attribute)
+      allow(s).to receive(:status=)
+      allow(s).to receive(:record_exception)
+    end
+  end
+  let(:fake_axn_tracer) do
+    double("Tracer").tap { |t| allow(t).to receive(:in_span).and_yield(axn_span) }
+  end
 
   before do
-    allow(described_class).to receive(:require).with("opentelemetry/instrumentation/ruby_llm")
-    target = install_target
-    fake_singleton = Class.new
-    fake_singleton.define_singleton_method(:instance) { target }
-    stub_const("OpenTelemetry::Instrumentation::RubyLLM::Instrumentation", fake_singleton)
+    allow(RubyLLM).to receive(:chat).and_return(chat_instance)
+    allow(chat_instance).to receive(:with_instructions).and_return(chat_instance)
+    allow(chat_instance).to receive(:with_params).and_return(chat_instance)
+    allow(chat_instance).to receive(:with_schema).and_return(chat_instance)
+    allow(chat_instance).to receive(:ask).and_return(llm_response)
+    allow(RubyLLM.models).to receive(:find).and_return(nil)
+    allow(llm_response).to receive(:cost).and_return(nil)
+    allow(Axn::Internal::Tracing).to receive(:tracer).and_return(fake_axn_tracer)
+    stub_const("OpenTelemetry::Trace", Module.new)
+    allow(OpenTelemetry::Trace).to receive(:current_span).and_return(span)
   end
 
-  after do
-    Axn::RubyLLM.reset_configuration!
-    described_class.reset!
+  after { Axn::RubyLLM.reset_configuration! }
+
+  it "sets gen_ai and cost attributes on the current span for a normal call" do
+    Axn::RubyLLM.ask(prompt:)
+    expect(span).to have_received(:set_attribute).with("gen_ai.request.model", "gpt-4o-mini")
+    expect(span).to have_received(:set_attribute).with("gen_ai.response.model", "gpt-4o-mini")
+    expect(span).to have_received(:set_attribute).with("gen_ai.usage.input_tokens", 10)
+    expect(span).to have_received(:set_attribute).with("gen_ai.usage.output_tokens", 5)
+    expect(span).to have_received(:set_attribute).with("axn.ruby_llm.stubbed", false)
   end
 
-  context "when configuration.opentelemetry = false" do
-    before { Axn::RubyLLM.configure { |c| c.opentelemetry = false } }
+  it "sets cost attribute when cost is available" do
+    model_info = instance_double("RubyLLM::Model")
+    cost_struct = instance_double(RubyLLM::Cost, total: 0.0007)
+    allow(RubyLLM.models).to receive(:find).and_return(model_info)
+    allow(llm_response).to receive(:cost).with(model: model_info).and_return(cost_struct)
+    Axn::RubyLLM.ask(prompt:)
+    expect(span).to have_received(:set_attribute).with("gen_ai.usage.cost", 0.0007)
+  end
 
-    it "does not install the upstream instrumentation" do
-      expect(install_target).not_to receive(:install)
-      described_class.maybe_install
+  context "when disabled (stubbed path)" do
+    before { Axn::RubyLLM.configure { |c| c.enabled = false } }
+
+    it "sets request model, zero tokens, zero cost, and stubbed=true; no response model" do
+      Axn::RubyLLM.ask(prompt:)
+      expect(span).to have_received(:set_attribute).with("gen_ai.request.model", "gpt-4o-mini")
+      expect(span).to have_received(:set_attribute).with("gen_ai.usage.input_tokens", 0)
+      expect(span).to have_received(:set_attribute).with("gen_ai.usage.output_tokens", 0)
+      expect(span).to have_received(:set_attribute).with("gen_ai.usage.cost", 0.0)
+      expect(span).to have_received(:set_attribute).with("axn.ruby_llm.stubbed", true)
+      expect(span).not_to have_received(:set_attribute).with("gen_ai.response.model", anything)
     end
   end
 
-  context "when configuration.opentelemetry = :auto and OpenTelemetry::SDK is not defined" do
-    before do
-      Axn::RubyLLM.configure { |c| c.opentelemetry = :auto }
-      hide_const("OpenTelemetry::SDK") if defined?(OpenTelemetry::SDK)
-    end
+  context "when OTel is not loaded" do
+    before { hide_const("OpenTelemetry::Trace") }
 
-    it "does not install" do
-      expect(install_target).not_to receive(:install)
-      described_class.maybe_install
+    it "still succeeds and makes no attribute calls" do
+      result = Axn::RubyLLM.ask(prompt:)
+      expect(result).to be_ok
+      expect(span).not_to have_received(:set_attribute)
     end
   end
 
-  context "when configuration.opentelemetry = true (force install)" do
-    before { Axn::RubyLLM.configure { |c| c.opentelemetry = true } }
+  context "when there is no active span (context not valid)" do
+    let(:span_context) { double("SpanContext", valid?: false) }
 
-    it "installs exactly once across multiple invocations" do
-      expect(install_target).to receive(:install).with({}).once
-      described_class.maybe_install
-      described_class.maybe_install
+    it "still succeeds and makes no attribute calls" do
+      result = Axn::RubyLLM.ask(prompt:)
+      expect(result).to be_ok
     end
   end
 
-  context "when configuration.opentelemetry = :auto and OpenTelemetry::SDK is defined" do
-    before do
-      Axn::RubyLLM.configure { |c| c.opentelemetry = :auto }
-      stub_const("OpenTelemetry::SDK", Module.new) unless defined?(OpenTelemetry::SDK)
-    end
+  context "when set_attribute raises" do
+    before { allow(span).to receive(:set_attribute).and_raise(StandardError, "span closed") }
 
-    it "installs the upstream instrumentation" do
-      expect(install_target).to receive(:install).with({}).once
-      described_class.maybe_install
+    it "still succeeds" do
+      expect(Axn::RubyLLM.ask(prompt:)).to be_ok
     end
   end
 end

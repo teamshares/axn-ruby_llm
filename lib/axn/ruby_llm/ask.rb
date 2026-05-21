@@ -26,8 +26,17 @@ module Axn
       error "Failed to parse JSON from LLM response", if: JSON::ParserError
 
       before do
-        Instrumentation.maybe_install
-        done!("disabled - returning stubbed values", **stubbed_exposures) if disabled?
+        if disabled?
+          exposures = stubbed_exposures
+          record_otel_attributes!(
+            input_tokens: exposures[:input_tokens],
+            output_tokens: exposures[:output_tokens],
+            cost: exposures[:cost],
+            response_model: nil,
+            stubbed: true,
+          )
+          done!("disabled - returning stubbed values", **exposures)
+        end
       end
 
       def call
@@ -38,6 +47,13 @@ module Axn
           output_tokens: llm_response.output_tokens,
           cost_breakdown:,
           cost: cost_breakdown&.total,
+          stubbed: false,
+        )
+        record_otel_attributes!(
+          input_tokens: llm_response.input_tokens,
+          output_tokens: llm_response.output_tokens,
+          cost: cost_breakdown&.total,
+          response_model: llm_response.model_id,
           stubbed: false,
         )
       rescue ::RubyLLM::RateLimitError => e
@@ -63,6 +79,7 @@ module Axn
 
       def parsed_response
         if schema
+          # with_schema makes RubyLLM parse the response into a Hash on success
           return llm_response.content if llm_response.content.is_a?(Hash)
 
           fail! "Schema response was not valid JSON"
@@ -78,7 +95,7 @@ module Axn
 
       memo def model_info
         ::RubyLLM.models.find(llm_response.model_id)
-      rescue StandardError
+      rescue ::RubyLLM::ModelNotFoundError
         nil
       end
 
@@ -95,6 +112,22 @@ module Axn
 
       def resolved_model
         model || Axn::RubyLLM.configuration.default_model
+      end
+
+      def record_otel_attributes!(input_tokens:, output_tokens:, cost:, response_model:, stubbed:)
+        return unless defined?(::OpenTelemetry::Trace)
+
+        span = ::OpenTelemetry::Trace.current_span
+        return unless span&.context&.valid?
+
+        span.set_attribute("gen_ai.request.model", resolved_model) if resolved_model
+        span.set_attribute("gen_ai.response.model", response_model) if response_model
+        span.set_attribute("gen_ai.usage.input_tokens", input_tokens) if input_tokens
+        span.set_attribute("gen_ai.usage.output_tokens", output_tokens) if output_tokens
+        span.set_attribute("gen_ai.usage.cost", cost) if cost
+        span.set_attribute("axn.ruby_llm.stubbed", stubbed) unless stubbed.nil?
+      rescue StandardError
+        # never let telemetry break the action
       end
     end
   end

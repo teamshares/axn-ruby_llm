@@ -9,7 +9,7 @@ Gem::Specification.new do |spec|
   spec.email = ["kali@teamshares.com"]
 
   spec.summary = "RubyLLM wrapper for Axn actions"
-  spec.description = "Call LLMs from Axn actions using RubyLLM, with structured error handling, optional JSON mode, and OpenTelemetry tracing."
+  spec.description = "Call LLMs from Axn actions using RubyLLM, with structured error handling, optional JSON mode, and cost/token tracking."
   spec.homepage = "https://github.com/teamshares/axn-ruby_llm"
   spec.license = "MIT"
 
@@ -30,6 +30,5 @@ Gem::Specification.new do |spec|
   spec.require_paths = ["lib"]
 
   spec.add_dependency "axn", ">= 0.1.0-alpha.4.2", "< 0.2.0"
-  spec.add_dependency "opentelemetry-instrumentation-ruby_llm", ">= 0.5", "< 1.0"
   spec.add_dependency "ruby_llm", ">= 1.0", "< 2.0"
 end
