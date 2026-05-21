@@ -63,6 +63,7 @@ module Axn
 
       def parsed_response
         if schema
+          # with_schema makes RubyLLM parse the response into a Hash on success
           return llm_response.content if llm_response.content.is_a?(Hash)
 
           fail! "Schema response was not valid JSON"
@@ -78,7 +79,7 @@ module Axn
 
       memo def model_info
         ::RubyLLM.models.find(llm_response.model_id)
-      rescue StandardError
+      rescue ::RubyLLM::ModelNotFoundError
         nil
       end
 

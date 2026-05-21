@@ -6,18 +6,24 @@ module Axn
     # so the host app doesn't have to add `c.use 'OpenTelemetry::Instrumentation::RubyLLM'`
     # to their OpenTelemetry::SDK.configure block. Idempotent.
     module Instrumentation
+      INSTALL_MUTEX = Mutex.new
+
       class << self
         def maybe_install
           return if @installed
-          return unless install?
 
-          require "opentelemetry/instrumentation/ruby_llm"
-          ::OpenTelemetry::Instrumentation::RubyLLM::Instrumentation.instance.install({})
-          @installed = true
+          INSTALL_MUTEX.synchronize do
+            return if @installed
+            return unless install?
+
+            require "opentelemetry/instrumentation/ruby_llm"
+            ::OpenTelemetry::Instrumentation::RubyLLM::Instrumentation.instance.install({})
+            @installed = true
+          end
         end
 
         def reset!
-          @installed = nil
+          INSTALL_MUTEX.synchronize { @installed = nil }
         end
 
         private

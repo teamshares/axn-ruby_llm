@@ -45,20 +45,26 @@ module Axn
           end
           allow(chat_instance).to receive(:with_instructions).and_return(chat_instance)
           allow(chat_instance).to receive(:with_params).and_return(chat_instance)
-          allow(chat_instance).to receive(:with_schema).with(schema).and_return(chat_instance) if schema
+          # Always stub with_schema so specs don't blow up if production code passes schema:
+          # even when the helper is called without schema:. Use a tight matcher when schema
+          # is known so the stub still validates the correct class is passed.
+          if schema
+            allow(chat_instance).to receive(:with_schema).with(schema).and_return(chat_instance)
+          else
+            allow(chat_instance).to receive(:with_schema).and_return(chat_instance)
+          end
           allow(chat_instance).to receive(:ask).and_return(llm_message)
           chat_instance
         end
 
         def _stub_axn_ruby_llm_cost(llm_message, model_id, cost)
-          if cost
-            model_info = Object.new
-            allow(::RubyLLM.models).to receive(:find).with(model_id).and_return(model_info)
-            cost_struct = instance_double(::RubyLLM::Cost, total: cost)
-            allow(llm_message).to receive(:cost).with(model: model_info).and_return(cost_struct)
-          else
-            allow(::RubyLLM.models).to receive(:find).with(model_id).and_return(nil)
-          end
+          model_info = instance_double("RubyLLM::Model")
+          allow(::RubyLLM.models).to receive(:find).with(model_id).and_return(model_info)
+          # Default to zero cost so specs exercise the "model found, cost computed" path.
+          # Pass cost: explicitly to assert a specific value.
+          cost_total = cost || 0.0
+          cost_struct = instance_double(::RubyLLM::Cost, total: cost_total)
+          allow(llm_message).to receive(:cost).with(model: model_info).and_return(cost_struct)
         end
       end
     end

@@ -216,15 +216,26 @@ RSpec.describe Axn::RubyLLM::Ask do
       end
     end
 
-    context "when RubyLLM.models.find raises" do
+    context "when RubyLLM.models.find raises ModelNotFoundError" do
       before do
-        allow(RubyLLM.models).to receive(:find).with(llm_model_id).and_raise(StandardError.new("registry boom"))
+        allow(RubyLLM.models).to receive(:find).with(llm_model_id).and_raise(RubyLLM::ModelNotFoundError.new("registry boom"))
       end
 
       it "treats missing model info as nil cost" do
         expect(result).to be_ok
         expect(result.cost).to be_nil
         expect(result.cost_breakdown).to be_nil
+      end
+    end
+
+    context "when RubyLLM.models.find raises an unexpected StandardError" do
+      before do
+        allow(RubyLLM.models).to receive(:find).with(llm_model_id).and_raise(StandardError.new("registry explosion"))
+      end
+
+      it "propagates as an LLM request failure" do
+        expect(result).not_to be_ok
+        expect(result.error).to eq("LLM request failed: registry explosion")
       end
     end
   end
@@ -363,6 +374,12 @@ RSpec.describe Axn::RubyLLM::Instrumentation do
 
     it "installs the upstream instrumentation" do
       expect(install_target).to receive(:install).with({}).once
+      described_class.maybe_install
+    end
+
+    it "does not re-install on subsequent calls" do
+      expect(install_target).to receive(:install).with({}).once
+      described_class.maybe_install
       described_class.maybe_install
     end
   end

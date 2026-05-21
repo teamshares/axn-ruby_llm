@@ -4,6 +4,20 @@ Call LLMs from [Axn](https://github.com/teamshares/axn) actions using [RubyLLM](
 
 Part of the `axn-*` extension ecosystem — see also [axn-mcp](https://github.com/teamshares/axn-mcp).
 
+### Why use this over calling RubyLLM directly?
+
+Three things you'd otherwise build at every callsite:
+
+1. **Structured error handling.** The Axn error DSL declaratively maps `RateLimitError`, `JSON::ParserError`, and generic `StandardError` to clean failure messages. Callers check `result.ok?` instead of wrapping every call in `begin/rescue`.
+
+2. **Production gating.** A single `c.enabled = -> { Rails.env.production? }` in an initializer stubs every LLM call in non-prod environments — no per-callsite guards needed. The stub is typed (`stubbed: true`, `input_tokens: 0`, etc.) so downstream code doesn't need to branch on it either.
+
+3. **Cost/token tracking and OTel tracing, wired up automatically.** Every call exposes `input_tokens`, `output_tokens`, `cost`, and `cost_breakdown` without you doing the `RubyLLM.models.find` lookup manually. OpenTelemetry traces install themselves when the SDK is present — nothing to add to your configure block.
+
+> **Scope note:** This gem covers the subset of RubyLLM functionality that [Teamshares](https://github.com/teamshares) uses internally — single-turn chat, structured output, and basic observability. It is intentionally minimal rather than a full-featured wrapper. Feedback and pull requests to extend it are very welcome.
+
+---
+
 ## Installation
 
 ```ruby
