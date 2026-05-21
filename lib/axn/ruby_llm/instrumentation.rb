@@ -18,6 +18,10 @@ module Axn
 
             require "opentelemetry/instrumentation/ruby_llm"
             ::OpenTelemetry::Instrumentation::RubyLLM::Instrumentation.instance.install({})
+          rescue LoadError
+            warn "[axn-ruby_llm] opentelemetry-instrumentation-ruby_llm not found; " \
+                 "add it to your Gemfile for OTel tracing support."
+          ensure
             @installed = true
           end
         end

@@ -24,11 +24,12 @@ Three things you'd otherwise build at every callsite:
 gem "axn-ruby_llm"
 ```
 
-Configure RubyLLM as normal (e.g. in `config/initializers/ruby_llm.rb`):
+Configure RubyLLM as normal (e.g. in `config/initializers/ruby_llm.rb`). The default model is `gpt-4o-mini`, but any [RubyLLM-supported provider](https://rubyllm.com/llms) works — just configure the appropriate API key and pass `model:` to override:
 
 ```ruby
 RubyLLM.configure do |c|
-  c.openai_api_key = ENV["OPENAI_API_KEY"]
+  c.openai_api_key  = ENV["OPENAI_API_KEY"]   # OpenAI
+  c.anthropic_api_key = ENV["ANTHROPIC_API_KEY"] # or Anthropic, Gemini, etc.
 end
 ```
 
@@ -36,7 +37,7 @@ Optionally configure gem-level defaults:
 
 ```ruby
 Axn::RubyLLM.configure do |c|
-  c.default_model = "gpt-4o-mini" # default
+  c.default_model = "gpt-4o-mini" # default; override with any RubyLLM model ID
 end
 ```
 
@@ -129,9 +130,15 @@ end
 
 ## OpenTelemetry
 
+`opentelemetry-instrumentation-ruby_llm` is a **peer dependency** — it is not pulled in automatically, so apps that don't use OpenTelemetry pay no gem weight. To enable tracing, add it to your own Gemfile:
+
+```ruby
+gem "opentelemetry-instrumentation-ruby_llm"
+```
+
 Tracing is provided by thoughtbot's [`opentelemetry-instrumentation-ruby_llm`](https://github.com/thoughtbot/opentelemetry-instrumentation-ruby_llm), which patches `RubyLLM::Chat#complete` and `RubyLLM::Embedding` with standard `gen_ai.*` GenAI semantic-convention attributes. Spans cover every `RubyLLM.chat` caller (not just `Ask`), tool calls, and embeddings.
 
-By default the instrumentation **auto-installs** when `OpenTelemetry::SDK` is loaded — the host app does not need to add a `c.use` line to its `OpenTelemetry::SDK.configure` block.
+Once the gem is present, the instrumentation **auto-installs** when `OpenTelemetry::SDK` is loaded — the host app does not need to add a `c.use` line to its `OpenTelemetry::SDK.configure` block.
 
 ```ruby
 Axn::RubyLLM.configure do |c|
