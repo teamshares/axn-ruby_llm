@@ -5,12 +5,11 @@ module Axn
     class Configuration
       DEFAULT_MODEL = "gpt-4o-mini"
 
-      attr_accessor :default_model, :enabled, :opentelemetry
+      attr_accessor :default_model, :enabled
 
       def initialize
         @default_model = DEFAULT_MODEL
         @enabled = true
-        @opentelemetry = :auto
       end
 
       def enabled?

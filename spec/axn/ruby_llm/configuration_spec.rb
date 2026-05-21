@@ -11,10 +11,6 @@ RSpec.describe Axn::RubyLLM::Configuration do
     it "defaults enabled to true" do
       expect(Axn::RubyLLM.configuration.enabled?).to be(true)
     end
-
-    it "defaults opentelemetry to :auto" do
-      expect(Axn::RubyLLM.configuration.opentelemetry).to eq(:auto)
-    end
   end
 
   describe "Axn::RubyLLM.configure" do

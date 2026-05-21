@@ -9,7 +9,7 @@ Gem::Specification.new do |spec|
   spec.email = ["kali@teamshares.com"]
 
   spec.summary = "RubyLLM wrapper for Axn actions"
-  spec.description = "Call LLMs from Axn actions using RubyLLM, with structured error handling, optional JSON mode, and OpenTelemetry tracing."
+  spec.description = "Call LLMs from Axn actions using RubyLLM, with structured error handling, optional JSON mode, and cost/token tracking."
   spec.homepage = "https://github.com/teamshares/axn-ruby_llm"
   spec.license = "MIT"
 

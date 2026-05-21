@@ -5,7 +5,6 @@ require "axn"
 
 require_relative "ruby_llm/version"
 require_relative "ruby_llm/configuration"
-require_relative "ruby_llm/instrumentation"
 require_relative "ruby_llm/ask"
 
 module Axn

@@ -1,6 +1,6 @@
 # axn-ruby_llm
 
-Call LLMs from [Axn](https://github.com/teamshares/axn) actions using [RubyLLM](https://github.com/crmne/ruby_llm), with declarative error handling, optional JSON mode, configurable defaults, and OpenTelemetry tracing.
+Call LLMs from [Axn](https://github.com/teamshares/axn) actions using [RubyLLM](https://github.com/crmne/ruby_llm), with declarative error handling, optional JSON mode, configurable defaults, and cost/token tracking.
 
 Part of the `axn-*` extension ecosystem — see also [axn-mcp](https://github.com/teamshares/axn-mcp).
 
@@ -12,7 +12,7 @@ Three things you'd otherwise build at every callsite:
 
 2. **Production gating.** A single `c.enabled = -> { Rails.env.production? }` in an initializer stubs every LLM call in non-prod environments — no per-callsite guards needed. The stub is typed (`stubbed: true`, `input_tokens: 0`, etc.) so downstream code doesn't need to branch on it either.
 
-3. **Cost/token tracking and OTel tracing, wired up automatically.** Every call exposes `input_tokens`, `output_tokens`, `cost`, and `cost_breakdown` without you doing the `RubyLLM.models.find` lookup manually. OpenTelemetry traces install themselves when the SDK is present — nothing to add to your configure block.
+3. **Cost/token tracking, exposed automatically.** Every call exposes `input_tokens`, `output_tokens`, `cost`, and `cost_breakdown` without you doing the `RubyLLM.models.find` lookup manually. If your app uses OpenTelemetry, these values are also set as attributes on the existing `axn.call` span — no configuration required.
 
 > **Scope note:** This gem covers the subset of RubyLLM functionality that [Teamshares](https://github.com/teamshares) uses internally — single-turn chat, structured output, and basic observability. It is intentionally minimal rather than a full-featured wrapper. Feedback and pull requests to extend it are very welcome.
 
@@ -130,25 +130,18 @@ end
 
 ## OpenTelemetry
 
-`opentelemetry-instrumentation-ruby_llm` is a **peer dependency** — it is not pulled in automatically, so apps that don't use OpenTelemetry pay no gem weight. To enable tracing, add it to your own Gemfile:
+If your app uses OpenTelemetry, `axn` already wraps every action in an `axn.call` span. This gem enriches that span with LLM-specific attributes automatically — no configuration required:
 
-```ruby
-gem "opentelemetry-instrumentation-ruby_llm"
-```
+| Attribute | Value |
+|---|---|
+| `gen_ai.request.model` | The model requested |
+| `gen_ai.response.model` | The model that responded |
+| `gen_ai.usage.input_tokens` | Prompt token count |
+| `gen_ai.usage.output_tokens` | Completion token count |
+| `gen_ai.usage.cost` | USD total (non-standard; useful for spend filtering) |
+| `axn.ruby_llm.stubbed` | `true` when production gating returned a stub |
 
-Tracing is provided by thoughtbot's [`opentelemetry-instrumentation-ruby_llm`](https://github.com/thoughtbot/opentelemetry-instrumentation-ruby_llm), which patches `RubyLLM::Chat#complete` and `RubyLLM::Embedding` with standard `gen_ai.*` GenAI semantic-convention attributes. Spans cover every `RubyLLM.chat` caller (not just `Ask`), tool calls, and embeddings.
-
-Once the gem is present, the instrumentation **auto-installs** when `OpenTelemetry::SDK` is loaded — the host app does not need to add a `c.use` line to its `OpenTelemetry::SDK.configure` block.
-
-```ruby
-Axn::RubyLLM.configure do |c|
-  c.opentelemetry = :auto # default — install when OpenTelemetry::SDK is defined
-  # c.opentelemetry = true  # force install
-  # c.opentelemetry = false # disable auto-install (host can still `c.use` it themselves)
-end
-```
-
-Emitted attributes include `gen_ai.operation.name`, `gen_ai.provider.name`, `gen_ai.request.model`, `gen_ai.response.model`, `gen_ai.usage.input_tokens`, and `gen_ai.usage.output_tokens`. Set `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true` to also capture system/input/output messages (PII risk — opt in deliberately).
+For LLM-level tracing (individual `RubyLLM.chat` calls, tool calls, embeddings, prompt content), add [`opentelemetry-instrumentation-ruby_llm`](https://github.com/thoughtbot/opentelemetry-instrumentation-ruby_llm) to your own Gemfile and configure it per its README. It is not a dependency of this gem.
 
 ## Production gating
 
