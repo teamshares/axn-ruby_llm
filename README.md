@@ -65,7 +65,6 @@ result = Axn::RubyLLM.ask(
 )
 ```
 
-The underlying action class is available as `Axn::RubyLLM::Ask` for cases where you need the full `Axn` interface (`call!`, `call_async`, instrumentation hooks, etc.).
 
 ### Structured output via schema
 
@@ -155,12 +154,12 @@ Axn::RubyLLM.configure do |c|
 end
 ```
 
-When disabled, `Ask` returns a **success** result with obvious stub content, so callers don't need per-callsite branching:
+When disabled, `Axn::RubyLLM.ask` returns a **success** result with obvious stub content, so callers don't need per-callsite branching:
 
 | Field | Stubbed value |
 |---|---|
 | `response` | `"stubbed response value"` (plain) / `{ "stubbed" => true }` (`json: true` or `schema:`) |
-| `raw_message` | `Ask::StubMessage` Data instance with `.content`, `.input_tokens`, `.output_tokens`, `.model_id` |
+| `raw_message` | Stub struct with `.content`, `.input_tokens`, `.output_tokens`, `.model_id` |
 | `input_tokens` / `output_tokens` | `0` |
 | `cost` | `0.0` |
 | `cost_breakdown` | `nil` |
