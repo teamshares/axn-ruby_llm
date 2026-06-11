@@ -65,6 +65,17 @@ RSpec.describe Axn::RubyLLM::RSpec::Helpers do
       end
     end
 
+    context "with cache token params" do
+      before { stub_axn_ruby_llm(response: "ok", input_tokens: 100, cache_read_tokens: 500, cache_write_tokens: 200) }
+
+      it "exposes cache_read_tokens, cache_write_tokens, and prompt_tokens sum" do
+        result = Axn::RubyLLM.ask(prompt: "hi")
+        expect(result.cache_read_tokens).to eq(500)
+        expect(result.cache_write_tokens).to eq(200)
+        expect(result.prompt_tokens).to eq(800) # 100 + 500 + 200
+      end
+    end
+
     context "when production code passes schema: but helper is called without schema:" do
       let(:schema_class) { Class.new }
       before { stub_axn_ruby_llm(response: { "x" => 1 }) }

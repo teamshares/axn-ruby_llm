@@ -18,6 +18,8 @@ RSpec.describe Axn::RubyLLM::Ask do
       content: llm_response_content,
       input_tokens: llm_input_tokens,
       output_tokens: llm_output_tokens,
+      cache_read_tokens: nil,
+      cache_write_tokens: nil,
       model_id: llm_model_id,
     )
   end
@@ -188,6 +190,9 @@ RSpec.describe Axn::RubyLLM::Ask do
     it "exposes input_tokens and output_tokens from the LLM response" do
       expect(result.input_tokens).to eq(12)
       expect(result.output_tokens).to eq(34)
+      expect(result.cache_read_tokens).to be_nil
+      expect(result.cache_write_tokens).to be_nil
+      expect(result.prompt_tokens).to eq(12) # input only, no cache tokens
     end
 
     it "exposes total cost as a Float via cost" do
@@ -196,6 +201,15 @@ RSpec.describe Axn::RubyLLM::Ask do
 
     it "exposes the full Cost struct via cost_breakdown" do
       expect(result.cost_breakdown).to eq(llm_cost)
+    end
+
+    context "when the provider returns no token data" do
+      let(:llm_input_tokens) { nil }
+      let(:llm_output_tokens) { nil }
+
+      it "exposes nil prompt_tokens" do
+        expect(result.prompt_tokens).to be_nil
+      end
     end
 
     context "when RubyLLM has no pricing for the model" do
@@ -212,6 +226,7 @@ RSpec.describe Axn::RubyLLM::Ask do
       it "still exposes token counts" do
         expect(result.input_tokens).to eq(12)
         expect(result.output_tokens).to eq(34)
+        expect(result.prompt_tokens).to eq(12)
       end
     end
 
@@ -282,6 +297,9 @@ RSpec.describe Axn::RubyLLM::Ask do
         expect(result.raw_message.model_id).to eq("stubbed")
         expect(result.input_tokens).to eq(0)
         expect(result.output_tokens).to eq(0)
+        expect(result.cache_read_tokens).to eq(0)
+        expect(result.cache_write_tokens).to eq(0)
+        expect(result.prompt_tokens).to eq(0)
         expect(result.cost).to eq(0.0)
         expect(result.cost_breakdown).to be_nil
       end
@@ -343,6 +361,8 @@ RSpec.describe "Axn::RubyLLM::Ask OTel attribute enrichment" do
                     content: "summary",
                     input_tokens: 10,
                     output_tokens: 5,
+                    cache_read_tokens: nil,
+                    cache_write_tokens: nil,
                     model_id: "gpt-4o-mini")
   end
   let(:chat_instance) { instance_double(RubyLLM::Chat) }

@@ -12,7 +12,7 @@ Three things you'd otherwise build at every callsite:
 
 2. **Production gating.** A single `c.enabled = -> { Rails.env.production? }` in an initializer stubs every LLM call in non-prod environments — no per-callsite guards needed. The stub is typed (`stubbed: true`, `input_tokens: 0`, etc.) so downstream code doesn't need to branch on it either.
 
-3. **Cost/token tracking, exposed automatically.** Every call exposes `input_tokens`, `output_tokens`, `cost`, and `cost_breakdown` without you doing the `RubyLLM.models.find` lookup manually. If your app uses OpenTelemetry, these values are also set as attributes on the existing `axn.call` span — no configuration required.
+3. **Cost/token tracking, exposed automatically.** Every call exposes `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `prompt_tokens` (the total), `cost`, and `cost_breakdown` without you doing the `RubyLLM.models.find` lookup manually. If your app uses OpenTelemetry, these values are also set as attributes on the existing `axn.call` span — no configuration required.
 
 > **Scope note:** This gem covers the subset of RubyLLM functionality that [Teamshares](https://github.com/teamshares) uses internally — single-turn chat, structured output, and basic observability. It is intentionally minimal rather than a full-featured wrapper. Feedback and pull requests to extend it are very welcome.
 
@@ -88,24 +88,26 @@ result.response # => { "company_id" => 42, "confidence" => 0.92, "reasoning" => 
 
 ### Token counts and cost
 
-Every successful result exposes token usage and cost in two tiers:
+Every successful result exposes token usage and cost:
 
 ```ruby
 result = Axn::RubyLLM.ask(prompt: "...")
 
-# Flat (common case)
-result.input_tokens    # => 412
-result.output_tokens   # => 78
-result.cost            # => 0.00056 (Float USD total; nil if RubyLLM has no pricing for the model)
+result.input_tokens       # => 412  (non-cached input tokens only)
+result.cache_read_tokens  # => 80   (tokens served from cache; nil if provider didn't return them)
+result.cache_write_tokens # => 20   (tokens written to cache; nil if provider didn't return them)
+result.prompt_tokens      # => 512  (input_tokens + cache_read_tokens + cache_write_tokens — total request-side tokens, OpenAI-style)
+result.output_tokens      # => 78
+result.cost               # => 0.00056 (Float USD total; nil if RubyLLM has no pricing for the model)
 
-# Resolved breakdown — RubyLLM::Cost struct
+# Full breakdown — RubyLLM::Cost struct with per-tier pricing
 result.cost_breakdown  # => #<Cost input: 0.0004, output: 0.00016, cache_read: 0.0, ..., total: 0.00056>
 
-# Full escape hatch — the raw RubyLLM::Message for cache/thinking tokens, etc.
+# Raw RubyLLM::Message for thinking tokens, raw provider data, etc.
 result.raw_message     # => #<RubyLLM::Message ...>
 ```
 
-`cost` and `cost_breakdown` are both `nil` when RubyLLM lacks pricing for the model (e.g. unknown/custom endpoints). Token counts are nil only if the provider did not return them.
+`cost` and `cost_breakdown` are both `nil` when RubyLLM lacks pricing for the model (e.g. unknown/custom endpoints). Token counts are nil only if the provider did not return them. `prompt_tokens` is nil only if all three input token fields are nil.
 
 Errors are handled via Axn's declarative `error` DSL:
 - `JSON::ParserError` → result fails with `"Failed to parse JSON from LLM response"`
@@ -135,7 +137,7 @@ If your app uses OpenTelemetry, `axn` already wraps every action in an `axn.call
 |---|---|
 | `gen_ai.request.model` | The model requested |
 | `gen_ai.response.model` | The model that responded |
-| `gen_ai.usage.input_tokens` | Prompt token count |
+| `gen_ai.usage.input_tokens` | Non-cached input token count |
 | `gen_ai.usage.output_tokens` | Completion token count |
 | `gen_ai.usage.cost` | USD total (non-standard; useful for spend filtering) |
 | `axn.ruby_llm.stubbed` | `true` when production gating returned a stub |
@@ -159,8 +161,8 @@ When disabled, `Axn::RubyLLM.ask` returns a **success** result with obvious stub
 | Field | Stubbed value |
 |---|---|
 | `response` | `"stubbed response value"` (plain) / `{ "stubbed" => true }` (`json: true` or `schema:`) |
-| `raw_message` | Stub struct with `.content`, `.input_tokens`, `.output_tokens`, `.model_id` |
-| `input_tokens` / `output_tokens` | `0` |
+| `raw_message` | Stub struct with `.content`, `.input_tokens`, `.output_tokens`, `.cache_read_tokens`, `.cache_write_tokens`, `.model_id` |
+| `input_tokens` / `output_tokens` / `cache_read_tokens` / `cache_write_tokens` / `prompt_tokens` | `0` |
 | `cost` | `0.0` |
 | `cost_breakdown` | `nil` |
 | `stubbed` | `true` |
