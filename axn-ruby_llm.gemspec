@@ -29,6 +29,6 @@ Gem::Specification.new do |spec|
   end
   spec.require_paths = ["lib"]
 
-  spec.add_dependency "axn", ">= 0.1.0-alpha.4.2", "< 0.2.0"
+  spec.add_dependency "axn", ">= 0.1.0-alpha.4.3", "< 0.2.0"
   spec.add_dependency "ruby_llm", ">= 1.0", "< 2.0"
 end
