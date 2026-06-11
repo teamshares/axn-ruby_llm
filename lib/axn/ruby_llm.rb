@@ -10,6 +10,7 @@ require_relative "ruby_llm/ask"
 module Axn
   module RubyLLM
     include Axn::Mountable
+
     mount_axn :ask, Ask
 
     class << self
