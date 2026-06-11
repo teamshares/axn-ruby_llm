@@ -2,9 +2,14 @@
 
 ## [0.1.2] - 2026-06-11
 
-- Add `cache_read_tokens` and `cache_write_tokens` exposures to `Ask`, surfacing the new fields introduced in RubyLLM 1.15. Note: `input_tokens` now means non-cached input tokens only (RubyLLM 1.15 semantic change); use `input_tokens + cache_read_tokens + cache_write_tokens` for total request-side token activity.
+Requires RubyLLM >= 1.15 (minimum version bumped from 1.0).
+
+RubyLLM 1.15 normalized token accounting: `input_tokens` now means non-cached input tokens only; cache activity is split into `cache_read_tokens` and `cache_write_tokens`. This release surfaces those fields and adds a convenience total.
+
+- Add `cache_read_tokens` and `cache_write_tokens` exposures to `Ask`.
+- Add `prompt_tokens` exposure — the sum of all three input token fields (`input_tokens + cache_read_tokens + cache_write_tokens`), matching OpenAI's `prompt_tokens` convention. Nil only if all three components are nil.
 - Update `stub_axn_ruby_llm` helper to accept `cache_read_tokens:` and `cache_write_tokens:` params.
-- Update `StubMessage` Data struct to include the new token fields (zeroed in stubs).
+- Update `StubMessage` Data struct to include the new token fields (all zeroed in stub/disabled mode).
 
 ## [0.1.1] - 2026-06-11
 

@@ -190,6 +190,9 @@ RSpec.describe Axn::RubyLLM::Ask do
     it "exposes input_tokens and output_tokens from the LLM response" do
       expect(result.input_tokens).to eq(12)
       expect(result.output_tokens).to eq(34)
+      expect(result.cache_read_tokens).to be_nil
+      expect(result.cache_write_tokens).to be_nil
+      expect(result.prompt_tokens).to eq(12) # input only, no cache tokens
     end
 
     it "exposes total cost as a Float via cost" do
@@ -214,6 +217,7 @@ RSpec.describe Axn::RubyLLM::Ask do
       it "still exposes token counts" do
         expect(result.input_tokens).to eq(12)
         expect(result.output_tokens).to eq(34)
+        expect(result.prompt_tokens).to eq(12)
       end
     end
 
@@ -284,6 +288,9 @@ RSpec.describe Axn::RubyLLM::Ask do
         expect(result.raw_message.model_id).to eq("stubbed")
         expect(result.input_tokens).to eq(0)
         expect(result.output_tokens).to eq(0)
+        expect(result.cache_read_tokens).to eq(0)
+        expect(result.cache_write_tokens).to eq(0)
+        expect(result.prompt_tokens).to eq(0)
         expect(result.cost).to eq(0.0)
         expect(result.cost_breakdown).to be_nil
       end

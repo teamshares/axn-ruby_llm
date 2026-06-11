@@ -18,6 +18,7 @@ module Axn
       exposes :output_tokens, allow_nil: true
       exposes :cache_read_tokens, allow_nil: true
       exposes :cache_write_tokens, allow_nil: true
+      exposes :prompt_tokens, allow_nil: true
       exposes :cost, allow_nil: true
       exposes :cost_breakdown, allow_nil: true
       exposes :stubbed, type: :boolean, default: false
@@ -49,6 +50,7 @@ module Axn
           output_tokens: llm_response.output_tokens,
           cache_read_tokens: llm_response.cache_read_tokens,
           cache_write_tokens: llm_response.cache_write_tokens,
+          prompt_tokens: total_input_tokens,
           cost_breakdown:,
           cost: cost_breakdown&.total,
           stubbed: false,
@@ -77,6 +79,7 @@ module Axn
           output_tokens: 0,
           cache_read_tokens: 0,
           cache_write_tokens: 0,
+          prompt_tokens: 0,
           cost: 0.0,
           cost_breakdown: nil,
           stubbed: true,
@@ -91,6 +94,11 @@ module Axn
           fail! "Schema response was not valid JSON"
         end
         json ? JSON.parse(llm_response.content) : llm_response.content
+      end
+
+      def total_input_tokens
+        vals = [llm_response.input_tokens, llm_response.cache_read_tokens, llm_response.cache_write_tokens]
+        vals.all?(&:nil?) ? nil : vals.sum(&:to_i)
       end
 
       def cost_breakdown
