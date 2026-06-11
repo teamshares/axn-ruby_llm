@@ -203,6 +203,15 @@ RSpec.describe Axn::RubyLLM::Ask do
       expect(result.cost_breakdown).to eq(llm_cost)
     end
 
+    context "when the provider returns no token data" do
+      let(:llm_input_tokens) { nil }
+      let(:llm_output_tokens) { nil }
+
+      it "exposes nil prompt_tokens" do
+        expect(result.prompt_tokens).to be_nil
+      end
+    end
+
     context "when RubyLLM has no pricing for the model" do
       before do
         allow(RubyLLM.models).to receive(:find).with(llm_model_id).and_return(nil)
