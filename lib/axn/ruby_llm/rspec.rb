@@ -37,7 +37,8 @@ module Axn
                     else
                       response.to_s
                     end
-          instance_double(::RubyLLM::Message, content:, input_tokens:, output_tokens:,
+          instance_double(::RubyLLM::Message,
+                          content:, input_tokens:, output_tokens:,
                           cache_read_tokens:, cache_write_tokens:, model_id:)
         end
 
