@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.2] - 2026-06-11
+
+- Add `cache_read_tokens` and `cache_write_tokens` exposures to `Ask`, surfacing the new fields introduced in RubyLLM 1.15. Note: `input_tokens` now means non-cached input tokens only (RubyLLM 1.15 semantic change); use `input_tokens + cache_read_tokens + cache_write_tokens` for total request-side token activity.
+- Update `stub_axn_ruby_llm` helper to accept `cache_read_tokens:` and `cache_write_tokens:` params.
+- Update `StubMessage` Data struct to include the new token fields (zeroed in stubs).
+
 ## [0.1.1] - 2026-06-11
 
 - Use `mount_axn` pattern for `Axn::RubyLLM.ask` / `.ask!` / `.ask_async` shortcuts (via `Axn::Mountable`), replacing hand-written delegation. Requires axn `>= 0.1.0-alpha.4.3`.
