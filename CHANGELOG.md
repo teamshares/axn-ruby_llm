@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.1.1] - 2026-06-11
+
+- Use `mount_axn` pattern for `Axn::RubyLLM.ask` / `.ask!` / `.ask_async` shortcuts (via `Axn::Mountable`), replacing hand-written delegation. Requires axn `>= 0.1.0-alpha.4.3`.
+
 ## [0.1.0] - 2026-05-21
 
 Initial release.
