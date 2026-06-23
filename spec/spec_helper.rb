@@ -16,6 +16,6 @@ RSpec.configure do |config|
   end
 
   config.after do
-    Axn::RubyLLM.reset_configuration!
+    Axn::RubyLLM.reset_config!
   end
 end

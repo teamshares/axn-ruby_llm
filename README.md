@@ -146,7 +146,7 @@ For LLM-level tracing (individual `RubyLLM.chat` calls, tool calls, embeddings, 
 
 ## Production gating
 
-Set `Configuration#enabled` to gate LLM calls — useful for skipping spend in non-production environments. Accepts a Boolean or a callable (evaluated per call):
+Set the `enabled` config to gate LLM calls — useful for skipping spend in non-production environments. Accepts a Boolean or a callable (evaluated per call):
 
 ```ruby
 Axn::RubyLLM.configure do |c|

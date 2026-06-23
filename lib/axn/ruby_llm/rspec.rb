@@ -18,7 +18,7 @@ module Axn
         # Returns the chat instance double for further assertions if needed.
         def stub_axn_ruby_llm(response:, model: nil, schema: nil, input_tokens: nil, output_tokens: nil,
                               cache_read_tokens: nil, cache_write_tokens: nil, cost: nil)
-          resolved_model_id = model || Axn::RubyLLM.configuration.default_model
+          resolved_model_id = model || Axn::RubyLLM.config.default_model
           llm_message = _stub_axn_ruby_llm_message(response, resolved_model_id, input_tokens, output_tokens,
                                                    cache_read_tokens:, cache_write_tokens:, schema:)
           chat_instance = _stub_axn_ruby_llm_chat(model, llm_message, schema:)

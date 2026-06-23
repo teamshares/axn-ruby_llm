@@ -68,7 +68,7 @@ module Axn
 
       private
 
-      def disabled? = !Axn::RubyLLM.configuration.enabled?
+      def disabled? = !Axn::RubyLLM.config.enabled?
 
       def stubbed_exposures
         content = schema || json ? { "stubbed" => true } : "stubbed response value"
@@ -125,7 +125,7 @@ module Axn
       end
 
       def resolved_model
-        model || Axn::RubyLLM.configuration.default_model
+        model || Axn::RubyLLM.config.default_model
       end
 
       def record_otel_attributes!(input_tokens:, output_tokens:, cost:, response_model:, stubbed:)
