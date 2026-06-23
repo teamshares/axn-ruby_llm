@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 RSpec.describe Axn::RubyLLM::RSpec::Helpers do
-  after { Axn::RubyLLM.reset_configuration! }
+  after { Axn::RubyLLM.reset_config! }
 
   describe "stub_axn_ruby_llm" do
     context "with a plain string response" do

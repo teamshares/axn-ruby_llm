@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+Adopts Axn's `Configurable` DSL for gem configuration (requires the axn version that ships `Axn::Configurable`).
+
+- Replace the hand-rolled `Configuration` class with `extend Axn::Configurable`, declaring `default_model` (default `"gpt-4o-mini"`) and `enabled` (default `true`, callable) as settings.
+- **Rename** `Axn::RubyLLM.configuration` → `Axn::RubyLLM.config` and `Axn::RubyLLM.reset_configuration!` → `Axn::RubyLLM.reset_config!`, matching the DSL's standard surface. `Axn::RubyLLM.configure { |c| ... }` is unchanged.
+- The old names are kept as **deprecated aliases** — they still work but emit a deprecation warning (`category: :deprecated`) and are scheduled for removal in the next minor version. See [DEPRECATIONS.md](DEPRECATIONS.md).
+
 ## [0.1.2] - 2026-06-11
 
 Requires RubyLLM >= 1.15 (minimum version bumped from 1.0).

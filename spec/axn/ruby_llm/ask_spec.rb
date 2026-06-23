@@ -35,7 +35,7 @@ RSpec.describe Axn::RubyLLM::Ask do
   end
 
   after do
-    Axn::RubyLLM.reset_configuration!
+    Axn::RubyLLM.reset_config!
   end
 
   context "with default params (json: false)" do
@@ -80,7 +80,7 @@ RSpec.describe Axn::RubyLLM::Ask do
 
   context "without a model override" do
     it "uses the configured default model" do
-      expect(RubyLLM).to receive(:chat).with(model: Axn::RubyLLM.configuration.default_model)
+      expect(RubyLLM).to receive(:chat).with(model: Axn::RubyLLM.config.default_model)
       result
     end
 
@@ -393,7 +393,7 @@ RSpec.describe "Axn::RubyLLM::Ask OTel attribute enrichment" do
     allow(OpenTelemetry::Trace).to receive(:current_span).and_return(span)
   end
 
-  after { Axn::RubyLLM.reset_configuration! }
+  after { Axn::RubyLLM.reset_config! }
 
   it "sets gen_ai and cost attributes on the current span for a normal call" do
     Axn::RubyLLM.ask(prompt:)
