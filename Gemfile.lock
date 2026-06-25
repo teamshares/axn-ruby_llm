@@ -1,6 +1,6 @@
 GIT
   remote: https://github.com/teamshares/axn.git
-  revision: ad74e07cc63daa121c971c77dff2bc49103d7bbb
+  revision: 4efa70c0fde2a96b3b25d7ce1aea7cd568f7122c
   branch: kali/pro-2769-axn-configuration-dsl-for-downstream-gem-consistency
   specs:
     axn (0.1.0.pre.alpha.4.3)
