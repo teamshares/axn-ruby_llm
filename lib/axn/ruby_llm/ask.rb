@@ -25,8 +25,9 @@ module Axn
 
       StubMessage = Data.define(:content, :input_tokens, :output_tokens, :cache_read_tokens, :cache_write_tokens, :model_id)
 
-      error prefix: "LLM request failed: "
-      error "Failed to parse JSON from LLM response", if: JSON::ParserError
+      error "LLM request failed"
+      error(prefixed: true, &:message)
+      error "Failed to parse JSON from LLM response", if: JSON::ParserError, prefixed: false
 
       before do
         if disabled?
