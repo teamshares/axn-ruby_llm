@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-06-26
+
 Adopts Axn's `Configurable` DSL for gem configuration (requires the axn version that ships `Axn::Configurable`).
 
 - Replace the hand-rolled `Configuration` class with `extend Axn::Configurable`, declaring `default_model` (default `"gpt-4o-mini"`) and `enabled` (default `true`, callable) as settings.

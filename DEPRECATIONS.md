@@ -6,8 +6,8 @@ A living list of deprecated APIs scheduled for removal. When you deprecate somet
 
 | Deprecated API | Replacement | Location | Deprecated in | Remove in |
 | -------------- | ----------- | -------- | ------------- | --------- |
-| `Axn::RubyLLM.configuration` | `Axn::RubyLLM.config` | `lib/axn/ruby_llm.rb` (`def configuration`, ~line 24) | Unreleased (post-0.1.2) | next minor |
-| `Axn::RubyLLM.reset_configuration!` | `Axn::RubyLLM.reset_config!` | `lib/axn/ruby_llm.rb` (`def reset_configuration!`, ~line 29) | Unreleased (post-0.1.2) | next minor |
+| `Axn::RubyLLM.configuration` | `Axn::RubyLLM.config` | `lib/axn/ruby_llm.rb` (`def configuration`, ~line 24) | 0.1.3 | next minor |
+| `Axn::RubyLLM.reset_configuration!` | `Axn::RubyLLM.reset_config!` | `lib/axn/ruby_llm.rb` (`def reset_configuration!`, ~line 29) | 0.1.3 | next minor |
 
 Both aliases were introduced as a compatibility shim when `Axn::RubyLLM` adopted Axn's `Configurable` DSL (which standardizes on `.config` / `.configure` / `reset_config!`). They remain fully functional but emit a `category: :deprecated` warning on use, via the private `_warn_deprecated_alias` helper in `lib/axn/ruby_llm.rb`.
 
