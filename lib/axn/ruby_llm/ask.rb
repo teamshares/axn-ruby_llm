@@ -25,9 +25,10 @@ module Axn
 
       StubMessage = Data.define(:content, :input_tokens, :output_tokens, :cache_read_tokens, :cache_write_tokens, :model_id)
 
+      # Base headline; every failure reason is prefixed "LLM request failed: <reason>" for a consistent surface.
       error "LLM request failed"
       error(prefixed: true, &:message)
-      error "Failed to parse JSON from LLM response", if: JSON::ParserError, prefixed: false
+      error "Response was not valid JSON", if: JSON::ParserError
 
       before do
         if disabled?
@@ -64,8 +65,7 @@ module Axn
           stubbed: false,
         )
       rescue ::RubyLLM::RateLimitError => e
-        # prefixed: false — keep the standalone message; the "LLM request failed" base is for unhandled exceptions.
-        fail! "Rate limit reached: #{e.message}", prefixed: false
+        fail! "Rate limit reached: #{e.message}"
       end
 
       private
@@ -93,7 +93,7 @@ module Axn
           # with_schema makes RubyLLM parse the response into a Hash on success
           return llm_response.content if llm_response.content.is_a?(Hash)
 
-          fail! "Schema response was not valid JSON", prefixed: false
+          fail! "Schema response was not valid JSON"
         end
         json ? JSON.parse(llm_response.content) : llm_response.content
       end

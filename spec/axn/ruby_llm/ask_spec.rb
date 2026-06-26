@@ -134,7 +134,7 @@ RSpec.describe Axn::RubyLLM::Ask do
 
       it "fails with a schema-specific error" do
         expect(result).not_to be_ok
-        expect(result.error).to eq("Schema response was not valid JSON")
+        expect(result.error).to eq("LLM request failed: Schema response was not valid JSON")
       end
     end
 
@@ -160,7 +160,7 @@ RSpec.describe Axn::RubyLLM::Ask do
 
     it "fails with a rate limit message" do
       expect(result).not_to be_ok
-      expect(result.error).to eq("Rate limit reached: 429 Too Many Requests")
+      expect(result.error).to eq("LLM request failed: Rate limit reached: 429 Too Many Requests")
     end
   end
 
@@ -181,7 +181,7 @@ RSpec.describe Axn::RubyLLM::Ask do
 
     it "fails with the JSON parse error message" do
       expect(result).not_to be_ok
-      expect(result.error).to eq("Failed to parse JSON from LLM response")
+      expect(result.error).to eq("LLM request failed: Response was not valid JSON")
     end
   end
 
