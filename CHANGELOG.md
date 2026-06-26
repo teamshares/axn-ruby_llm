@@ -10,6 +10,11 @@ Adopts Axn's `Configurable` DSL for gem configuration (requires the axn version 
 - **Rename** `Axn::RubyLLM.configuration` → `Axn::RubyLLM.config` and `Axn::RubyLLM.reset_configuration!` → `Axn::RubyLLM.reset_config!`, matching the DSL's standard surface. `Axn::RubyLLM.configure { |c| ... }` is unchanged.
 - The old names are kept as **deprecated aliases** — they still work but emit a deprecation warning (`category: :deprecated`) and are scheduled for removal in the next minor version. See [DEPRECATIONS.md](DEPRECATIONS.md).
 
+Also migrates the `Ask` error-message DSL to axn's new nested-error semantics ([axn#109](https://github.com/teamshares/axn/pull/109)), which removed per-message `prefix:` in favor of a base `error` headline that prefixes failure reasons by default. **All `result.error` strings are unchanged** from 0.1.2:
+
+- The `"LLM request failed: "` headline is now a base `error` plus a `prefixed: true` dynamic detail, so unhandled exceptions still surface as `"LLM request failed: <message>"`.
+- The rate-limit and schema-parse `fail!` reasons opt out with `prefixed: false` to keep their standalone messages (`"Rate limit reached: …"`, `"Schema response was not valid JSON"`) — under the new default they would otherwise have gained the base prefix.
+
 ## [0.1.2] - 2026-06-11
 
 Requires RubyLLM >= 1.15 (minimum version bumped from 1.0).

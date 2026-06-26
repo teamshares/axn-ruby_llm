@@ -64,7 +64,8 @@ module Axn
           stubbed: false,
         )
       rescue ::RubyLLM::RateLimitError => e
-        fail! "Rate limit reached: #{e.message}"
+        # prefixed: false — keep the standalone message; the "LLM request failed" base is for unhandled exceptions.
+        fail! "Rate limit reached: #{e.message}", prefixed: false
       end
 
       private
@@ -92,7 +93,7 @@ module Axn
           # with_schema makes RubyLLM parse the response into a Hash on success
           return llm_response.content if llm_response.content.is_a?(Hash)
 
-          fail! "Schema response was not valid JSON"
+          fail! "Schema response was not valid JSON", prefixed: false
         end
         json ? JSON.parse(llm_response.content) : llm_response.content
       end
