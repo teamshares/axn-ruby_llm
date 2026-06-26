@@ -44,6 +44,10 @@ RSpec.describe Axn::RubyLLM::Ask do
       expect(result.response).to eq("Here is the summary.")
     end
 
+    it "sets a meaningful success message" do
+      expect(result.success).to eq("LLM request completed")
+    end
+
     it "does not configure JSON response format" do
       expect(chat_instance).not_to receive(:with_params)
       result
@@ -287,6 +291,10 @@ RSpec.describe Axn::RubyLLM::Ask do
       it "returns a success result without touching RubyLLM" do
         expect(RubyLLM).not_to receive(:chat)
         expect(result).to be_ok
+      end
+
+      it "sets a success message explaining the stubbed values" do
+        expect(result.success).to eq("LLM request completed (using stubbed values - actual LLM request disabled)")
       end
 
       it "exposes a stub response and stubbed flag" do

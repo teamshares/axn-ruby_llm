@@ -17,6 +17,9 @@ Also migrates the `Ask` error-message DSL to axn's new nested-error semantics ([
   - Schema parse: `"LLM request failed: Schema response was not valid JSON"`
   - JSON parse: `"LLM request failed: Response was not valid JSON"` (reason reworded from `"Failed to parse JSON from LLM response"` so it joins the headline cleanly)
   - Unhandled exceptions: `"LLM request failed: <exception message>"` (unchanged)
+- **`result.success` now carries a meaningful headline** instead of axn's generic `"Action completed successfully"`:
+  - Normal calls: `"LLM request completed"`.
+  - Production-gated (disabled) calls: `"LLM request completed (using stubbed values - actual LLM request disabled)"`.
 
 ## [0.1.2] - 2026-06-11
 
