@@ -25,14 +25,13 @@ module Axn
 
       StubMessage = Data.define(:content, :input_tokens, :output_tokens, :cache_read_tokens, :cache_write_tokens, :model_id)
 
-      SUCCESS_HEADLINE = "LLM request completed"
-
-      # Base headlines; every failure reason is prefixed "LLM request failed: <reason>" and success
-      # mirrors with "LLM request completed", for a consistent result.error / result.success surface.
+      # Base headlines for a consistent result.error / result.success surface: failures read
+      # "LLM request failed: <reason>"; successes read "LLM request completed", with any detail
+      # attached parenthetically via join: (e.g. the stubbed-values note on the disabled path below).
       error "LLM request failed"
       error(standalone: false, &:message)
       error "Response was not valid JSON", if: JSON::ParserError
-      success SUCCESS_HEADLINE
+      success "LLM request completed", join: ->(base, reason) { "#{base} (#{reason})" }
 
       before do
         if disabled?
@@ -44,8 +43,8 @@ module Axn
             response_model: nil,
             stubbed: true,
           )
-          # standalone: true so we compose the headline ourselves rather than getting "<headline>: <reason>".
-          done!("#{SUCCESS_HEADLINE} (using stubbed values - actual LLM request disabled)", standalone: true, **exposures)
+          # Reason attaches to the "LLM request completed" base via the parenthetical join: above.
+          done!("using stubbed values - actual LLM request disabled", **exposures)
         end
       end
 
