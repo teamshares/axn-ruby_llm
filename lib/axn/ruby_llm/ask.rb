@@ -30,7 +30,7 @@ module Axn
       # Base headlines; every failure reason is prefixed "LLM request failed: <reason>" and success
       # mirrors with "LLM request completed", for a consistent result.error / result.success surface.
       error "LLM request failed"
-      error(prefixed: true, &:message)
+      error(standalone: false, &:message)
       error "Response was not valid JSON", if: JSON::ParserError
       success SUCCESS_HEADLINE
 
@@ -44,8 +44,8 @@ module Axn
             response_model: nil,
             stubbed: true,
           )
-          # prefixed: false so we compose the headline ourselves rather than getting "<headline>: <reason>".
-          done!("#{SUCCESS_HEADLINE} (using stubbed values - actual LLM request disabled)", prefixed: false, **exposures)
+          # standalone: true so we compose the headline ourselves rather than getting "<headline>: <reason>".
+          done!("#{SUCCESS_HEADLINE} (using stubbed values - actual LLM request disabled)", standalone: true, **exposures)
         end
       end
 

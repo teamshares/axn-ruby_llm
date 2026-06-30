@@ -10,7 +10,7 @@ Adopts Axn's `Configurable` DSL for gem configuration (requires the axn version 
 - **Rename** `Axn::RubyLLM.configuration` → `Axn::RubyLLM.config` and `Axn::RubyLLM.reset_configuration!` → `Axn::RubyLLM.reset_config!`, matching the DSL's standard surface. `Axn::RubyLLM.configure { |c| ... }` is unchanged.
 - The old names are kept as **deprecated aliases** — they still work but emit a deprecation warning (`category: :deprecated`) and are scheduled for removal in the next minor version. See [DEPRECATIONS.md](DEPRECATIONS.md).
 
-Also migrates the `Ask` error-message DSL to axn's new nested-error semantics ([axn#109](https://github.com/teamshares/axn/pull/109)), which removed per-message `prefix:` in favor of a base `error` headline that prefixes failure reasons by default.
+Also migrates the `Ask` error-message DSL to axn's new message-presentation semantics ([axn#109](https://github.com/teamshares/axn/pull/109), [#132](https://github.com/teamshares/axn/pull/132), [#134](https://github.com/teamshares/axn/pull/134)), which replaced per-message `prefix:` with a base `error`/`success` headline plus a `standalone:` attach flag. Requires the axn version that ships these.
 
 - **`result.error` now carries a consistent `"LLM request failed: <reason>"` headline for every failure mode** (previously only unhandled exceptions were prefixed). Affected strings:
   - Rate limit: `"LLM request failed: Rate limit reached: <message>"`
