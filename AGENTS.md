@@ -1,38 +1,25 @@
 # AGENTS.md
 
-Guidance for agents working in **axn-ruby_llm**. Read before writing code.
+## Axn actions
 
-## Writing or modifying Axn actions
-
-Everything in `lib/` (e.g. `Ask` in `lib/axn/ruby_llm/ask.rb`) is itself an Axn action
-(`include Axn`). Before writing or modifying one, read axn's in-gem agent guide: run
-`bundle show axn` and read `AGENTS-consuming.md` at that path ([source](https://github.com/teamshares/axn/blob/main/AGENTS-consuming.md), added in [axn#125](https://github.com/teamshares/axn/pull/125)). It covers the
-`expects`/`exposes`/`call` contract, how results and failures surface (`fail!` vs `fails_on` vs
-unhandled exception, base/reason message prefixing via `standalone:`/`join:`), and the subtle
-gotchas — denser and more version-accurate than re-deriving it from source.
+Everything in `lib/` (e.g. `Ask`) is an Axn action (`include Axn`). Before writing or modifying
+one: `bundle show axn` and read `AGENTS-consuming.md` at that path — the `expects`/`exposes`/`call`
+contract, failure surfaces (`fail!`/`fails_on`/unhandled exception, `standalone:`/`join:`), gotchas.
 
 ## Deprecations
 
-[DEPRECATIONS.md](DEPRECATIONS.md) is the living record of deprecated public API scheduled for
-removal. Keep it in sync with the code:
+[DEPRECATIONS.md](DEPRECATIONS.md) tracks deprecated public API.
 
-- **Deprecating something?** Add a row to the table: the deprecated API, its replacement, where it
-  lives (file + rough line), the version it was deprecated in, and the version it's scheduled for
-  removal in. Also note the deprecation in `CHANGELOG.md` under `## [Unreleased]`.
-- **Removing something?** Delete its row from `DEPRECATIONS.md` and record the removal in
-  `CHANGELOG.md` — the changelog is the historical record once the row is gone.
-- **Cutting a release that reaches a "Remove in" version?** Check `DEPRECATIONS.md` first and
-  actually remove what's due, per its removal checklist, rather than letting it linger past its
-  scheduled version.
-- Never let `DEPRECATIONS.md` drift from `lib/` — a stale row (wrong location, already-removed API
-  still listed) is worse than no row.
+- Deprecating something: add a row (API, replacement, location, deprecated-in, remove-in) + a
+  `CHANGELOG.md` `## [Unreleased]` entry.
+- Removing something: delete its row, note the removal in `CHANGELOG.md`.
+- Before a release: check for entries whose "Remove in" version has arrived; remove them per their
+  checklist.
 
 ## Changes & compatibility
 
-- This gem tracks [axn](https://github.com/teamshares/axn) closely (see `Gemfile`/`Gemfile.lock`).
-  When axn ships a breaking DSL change, migrate call sites in the same PR and verify
-  `result.error`/`result.success` strings are unchanged (or deliberately changed) with exact-`eq`
-  specs, not loose `include` matchers.
-- CHANGELOG every user-visible change under `## [Unreleased]`, promoted to a version heading at
-  release time (see `CHANGELOG.md` for the format).
-- Run `bundle exec rspec` and `bundle exec rubocop` before calling work done.
+- Tracks [axn](https://github.com/teamshares/axn) closely (`Gemfile`/`Gemfile.lock`). On an axn
+  breaking DSL change, migrate call sites in the same PR; assert `result.error`/`result.success`
+  with exact `eq`, not `include`.
+- CHANGELOG every user-visible change under `## [Unreleased]`.
+- `bundle exec rspec && bundle exec rubocop` before done.
