@@ -25,11 +25,24 @@ module Axn
 
       StubMessage = Data.define(:content, :input_tokens, :output_tokens, :cache_read_tokens, :cache_write_tokens, :model_id)
 
+      # RubyLLM wraps HTTP-response-level provider errors (4xx/5xx) in its own hierarchy, but
+      # connection-level failures (timeout, DNS, refused) surface as raw Faraday errors, never
+      # wrapped. Both are "known" failure shapes safe to surface verbatim; anything outside this
+      # is a bug and must not leak its message into a user-facing result.
+      KNOWN_ERROR = ->(exception:) { exception.is_a?(::RubyLLM::Error) || exception.is_a?(::Faraday::Error) }
+      RETRYABLE_ERROR = lambda { |exception:|
+        [::RubyLLM::OverloadedError, ::RubyLLM::ServiceUnavailableError, ::RubyLLM::ServerError].any? { |k| exception.is_a?(k) }
+      }
+
       # Base headlines for a consistent result.error / result.success surface: failures read
       # "LLM request failed: <reason>"; successes read "LLM request completed", with any detail
       # attached parenthetically via join: (e.g. the stubbed-values note on the disabled path below).
+      # Reason entries are ordered most-specific-last (axn checks most-recently-declared first), so a
+      # narrower match (retryable, context length, JSON parse) wins over the generic KNOWN_ERROR catch-all.
       error "LLM request failed"
-      error(standalone: false, &:message)
+      error(if: KNOWN_ERROR, &:message)
+      error(if: RETRYABLE_ERROR) { |e| "Provider temporarily unavailable, try again later: #{e.message}" }
+      error(if: ::RubyLLM::ContextLengthExceededError) { |e| "Prompt exceeds the model's context window: #{e.message}" }
       error "Response was not valid JSON", if: JSON::ParserError
       success "LLM request completed", join: ->(base, reason) { "#{base} (#{reason})" }
 

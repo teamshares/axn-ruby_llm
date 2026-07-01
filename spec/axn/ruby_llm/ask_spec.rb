@@ -168,14 +168,64 @@ RSpec.describe Axn::RubyLLM::Ask do
     end
   end
 
-  context "when a generic error occurs" do
+  context "when an unrecognized StandardError occurs (e.g. a bug)" do
     before do
-      allow(chat_instance).to receive(:ask).and_raise(StandardError.new("Network timeout"))
+      allow(chat_instance).to receive(:ask).and_raise(StandardError.new("undefined method 'foo' for nil"))
     end
 
-    it "fails with the error prefix" do
+    it "fails with the bare headline, without leaking the exception message" do
       expect(result).not_to be_ok
-      expect(result.error).to eq("LLM request failed: Network timeout")
+      expect(result.error).to eq("LLM request failed")
+    end
+  end
+
+  context "when RubyLLM raises one of its own error types" do
+    before do
+      allow(chat_instance).to receive(:ask).and_raise(RubyLLM::UnauthorizedError.new("Invalid API key - check your credentials"))
+    end
+
+    it "surfaces the provider's message" do
+      expect(result).not_to be_ok
+      expect(result.error).to eq("LLM request failed: Invalid API key - check your credentials")
+    end
+  end
+
+  context "when the underlying HTTP transport fails (e.g. a timeout)" do
+    before do
+      allow(chat_instance).to receive(:ask).and_raise(Faraday::TimeoutError.new("execution expired"))
+    end
+
+    it "surfaces the transport error's message" do
+      expect(result).not_to be_ok
+      expect(result.error).to eq("LLM request failed: execution expired")
+    end
+  end
+
+  context "when the provider is overloaded or temporarily unavailable" do
+    {
+      "RubyLLM::OverloadedError" => RubyLLM::OverloadedError,
+      "RubyLLM::ServiceUnavailableError" => RubyLLM::ServiceUnavailableError,
+      "RubyLLM::ServerError" => RubyLLM::ServerError,
+    }.each do |name, klass|
+      context "with #{name}" do
+        before { allow(chat_instance).to receive(:ask).and_raise(klass.new("please try again later")) }
+
+        it "fails with a retryable-specific message" do
+          expect(result).not_to be_ok
+          expect(result.error).to eq("LLM request failed: Provider temporarily unavailable, try again later: please try again later")
+        end
+      end
+    end
+  end
+
+  context "when the prompt exceeds the model's context window" do
+    before do
+      allow(chat_instance).to receive(:ask).and_raise(RubyLLM::ContextLengthExceededError.new("maximum context length is 8192 tokens"))
+    end
+
+    it "fails with an actionable, detail-preserving message" do
+      expect(result).not_to be_ok
+      expect(result.error).to eq("LLM request failed: Prompt exceeds the model's context window: maximum context length is 8192 tokens")
     end
   end
 
@@ -250,9 +300,9 @@ RSpec.describe Axn::RubyLLM::Ask do
         allow(RubyLLM.models).to receive(:find).with(llm_model_id).and_raise(StandardError.new("registry explosion"))
       end
 
-      it "propagates as an LLM request failure" do
+      it "propagates as an LLM request failure, without leaking the exception message" do
         expect(result).not_to be_ok
-        expect(result.error).to eq("LLM request failed: registry explosion")
+        expect(result.error).to eq("LLM request failed")
       end
     end
   end
