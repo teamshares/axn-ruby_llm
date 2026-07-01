@@ -110,7 +110,7 @@ result.raw_message     # => #<RubyLLM::Message ...>
 
 `cost` and `cost_breakdown` are both `nil` when RubyLLM lacks pricing for the model (e.g. unknown/custom endpoints). Token counts are nil only if the provider did not return them. `prompt_tokens` is nil only if all three input token fields are nil.
 
-Errors are handled via Axn's declarative `error` DSL. Every failure shares a consistent `"LLM request failed: <reason>"` headline:
+Errors are handled via Axn's declarative `error` DSL. Every failure shares a consistent `"LLM request failed: <reason>"` headline (the headline itself is configurable via `c.error_headline =`, e.g. to `"Something went wrong calling the LLM"`; the reasons below are unaffected):
 - `JSON::ParserError` → `"LLM request failed: Response was not valid JSON"`
 - `RubyLLM::RateLimitError` (HTTP 429, provider-agnostic) → `"LLM request failed: Rate limit reached: <message>"`
 - `RubyLLM::OverloadedError` / `ServiceUnavailableError` / `ServerError` (5xx, transient) → `"LLM request failed: Provider temporarily unavailable, try again later: <message>"`
