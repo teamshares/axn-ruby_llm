@@ -109,11 +109,11 @@ result.raw_message     # => #<RubyLLM::Message ...>
 
 `cost` and `cost_breakdown` are both `nil` when RubyLLM lacks pricing for the model (e.g. unknown/custom endpoints). Token counts are nil only if the provider did not return them. `prompt_tokens` is nil only if all three input token fields are nil.
 
-Errors are handled via Axn's declarative `error` DSL:
-- `JSON::ParserError` → result fails with `"Failed to parse JSON from LLM response"`
-- `RubyLLM::RateLimitError` (HTTP 429, provider-agnostic) → result fails with `"Rate limit reached: <message>"`
-- `schema:` set but LLM returned non-JSON → result fails with `"Schema response was not valid JSON"`
-- Any other `StandardError` → result fails with `"LLM request failed: <message>"`
+Errors are handled via Axn's declarative `error` DSL. Every failure shares a consistent `"LLM request failed: <reason>"` headline:
+- `JSON::ParserError` → `"LLM request failed: Response was not valid JSON"`
+- `RubyLLM::RateLimitError` (HTTP 429, provider-agnostic) → `"LLM request failed: Rate limit reached: <message>"`
+- `schema:` set but LLM returned non-JSON → `"LLM request failed: Schema response was not valid JSON"`
+- Any other `StandardError` → `"LLM request failed: <message>"`
 
 ## Testing
 
@@ -167,4 +167,4 @@ When disabled, `Axn::RubyLLM.ask` returns a **success** result with obvious stub
 | `cost_breakdown` | `nil` |
 | `stubbed` | `true` |
 
-Check `result.stubbed` if you need to branch on it (e.g. skip downstream writes that would otherwise persist stub LLM output). The Axn result's `message` is `"disabled - returning stubbed values"` for the same purpose.
+Check `result.stubbed` if you need to branch on it (e.g. skip downstream writes that would otherwise persist stub LLM output). `result.success` is `"LLM request completed (using stubbed values - actual LLM request disabled)"` for the same purpose; a normal (non-stubbed) call succeeds with `"LLM request completed"`.

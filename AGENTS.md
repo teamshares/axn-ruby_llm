@@ -2,6 +2,15 @@
 
 Guidance for agents working in **axn-ruby_llm**. Read before writing code.
 
+## Writing or modifying Axn actions
+
+Everything in `lib/` (e.g. `Ask` in `lib/axn/ruby_llm/ask.rb`) is itself an Axn action
+(`include Axn`). Before writing or modifying one, read axn's in-gem agent guide: run
+`bundle show axn` and read `AGENTS-consuming.md` at that path ([source](https://github.com/teamshares/axn/blob/main/AGENTS-consuming.md), added in [axn#125](https://github.com/teamshares/axn/pull/125)). It covers the
+`expects`/`exposes`/`call` contract, how results and failures surface (`fail!` vs `fails_on` vs
+unhandled exception, base/reason message prefixing via `standalone:`/`join:`), and the subtle
+gotchas — denser and more version-accurate than re-deriving it from source.
+
 ## Deprecations
 
 [DEPRECATIONS.md](DEPRECATIONS.md) is the living record of deprecated public API scheduled for
