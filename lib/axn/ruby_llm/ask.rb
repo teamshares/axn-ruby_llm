@@ -25,11 +25,23 @@ module Axn
 
       StubMessage = Data.define(:content, :input_tokens, :output_tokens, :cache_read_tokens, :cache_write_tokens, :model_id)
 
-      # RubyLLM wraps HTTP-response-level provider errors (4xx/5xx) in its own hierarchy, but
-      # connection-level failures (timeout, DNS, refused) surface as raw Faraday errors, never
-      # wrapped. Both are "known" failure shapes safe to surface verbatim; anything outside this
-      # is a bug and must not leak its message into a user-facing result.
-      KNOWN_ERROR = ->(exception:) { exception.is_a?(::RubyLLM::Error) || exception.is_a?(::Faraday::Error) }
+      # RubyLLM wraps HTTP-response-level provider errors (4xx/5xx) under RubyLLM::Error, but its
+      # non-HTTP errors (bad config, missing model/prompt/role, unsupported attachment) subclass
+      # StandardError directly -- so RubyLLM::Error alone misses them. Connection-level failures
+      # (timeout, DNS, refused) never reach RubyLLM at all and surface as raw Faraday errors. All
+      # three are "known" failure shapes safe to surface verbatim; anything outside this is a bug
+      # and must not leak its message into a user-facing result.
+      KNOWN_ERROR_CLASSES = [
+        ::RubyLLM::Error,
+        ::Faraday::Error,
+        ::RubyLLM::ConfigurationError,
+        ::RubyLLM::ModelNotFoundError,
+        ::RubyLLM::PromptNotFoundError,
+        ::RubyLLM::InvalidRoleError,
+        ::RubyLLM::InvalidToolChoiceError,
+        ::RubyLLM::UnsupportedAttachmentError,
+      ].freeze
+      KNOWN_ERROR = ->(exception:) { KNOWN_ERROR_CLASSES.any? { |k| exception.is_a?(k) } }
       RETRYABLE_ERROR = lambda { |exception:|
         [::RubyLLM::OverloadedError, ::RubyLLM::ServiceUnavailableError, ::RubyLLM::ServerError].any? { |k| exception.is_a?(k) }
       }

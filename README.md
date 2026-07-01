@@ -116,7 +116,7 @@ Errors are handled via Axn's declarative `error` DSL. Every failure shares a con
 - `RubyLLM::OverloadedError` / `ServiceUnavailableError` / `ServerError` (5xx, transient) → `"LLM request failed: Provider temporarily unavailable, try again later: <message>"`
 - `RubyLLM::ContextLengthExceededError` → `"LLM request failed: Prompt exceeds the model's context window: <message>"` (message retains the provider's token counts)
 - `schema:` set but LLM returned non-JSON → `"LLM request failed: Schema response was not valid JSON"`
-- Any other `RubyLLM::Error` (auth, bad request, payment, etc.) or `Faraday::Error` (network/transport failure) → `"LLM request failed: <message>"`
+- Any other known RubyLLM error — `RubyLLM::Error` (auth, bad request, payment, etc.), `RubyLLM::ConfigurationError`, `ModelNotFoundError`, `PromptNotFoundError`, `InvalidRoleError`, `InvalidToolChoiceError`, `UnsupportedAttachmentError` — or `Faraday::Error` (network/transport failure) → `"LLM request failed: <message>"`
 - Any other `StandardError` (i.e. not a recognized RubyLLM/network failure — most likely a bug) → `"LLM request failed"`, with no exception detail leaked into the message
 
 ## Testing

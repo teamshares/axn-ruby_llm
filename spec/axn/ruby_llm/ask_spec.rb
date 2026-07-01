@@ -210,6 +210,22 @@ RSpec.describe Axn::RubyLLM::Ask do
     end
   end
 
+  context "when RubyLLM raises one of its non-HTTP error types" do
+    {
+      "RubyLLM::ConfigurationError" => [RubyLLM::ConfigurationError, "No API key configured for openai"],
+      "RubyLLM::ModelNotFoundError" => [RubyLLM::ModelNotFoundError, "Model gpt-99 not found"],
+    }.each do |name, (klass, message)|
+      context "with #{name}" do
+        before { allow(chat_instance).to receive(:ask).and_raise(klass.new(message)) }
+
+        it "surfaces the error's message rather than the bare headline" do
+          expect(result).not_to be_ok
+          expect(result.error).to eq("LLM request failed: #{message}")
+        end
+      end
+    end
+  end
+
   context "when the provider is overloaded or temporarily unavailable" do
     {
       "RubyLLM::OverloadedError" => RubyLLM::OverloadedError,
