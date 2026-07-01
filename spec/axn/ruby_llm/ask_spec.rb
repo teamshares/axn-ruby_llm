@@ -157,6 +157,15 @@ RSpec.describe Axn::RubyLLM::Ask do
     end
   end
 
+  context "with a custom error_headline configured" do
+    before { Axn::RubyLLM.configure { |c| c.error_headline = "Something went wrong calling the LLM" } }
+
+    it "prefixes failures with the configured headline instead of the default" do
+      allow(chat_instance).to receive(:ask).and_raise(RubyLLM::UnauthorizedError.new("Invalid API key"))
+      expect(result.error).to eq("Something went wrong calling the LLM: Invalid API key")
+    end
+  end
+
   context "when the provider raises a rate limit error" do
     before do
       allow(chat_instance).to receive(:ask).and_raise(RubyLLM::RateLimitError.new("429 Too Many Requests"))

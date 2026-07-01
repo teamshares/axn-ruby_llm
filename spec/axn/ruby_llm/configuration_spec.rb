@@ -11,6 +11,10 @@ RSpec.describe "Axn::RubyLLM configuration" do
     it "defaults enabled to true" do
       expect(Axn::RubyLLM.config.enabled?).to be(true)
     end
+
+    it "defaults error_headline to 'LLM request failed'" do
+      expect(Axn::RubyLLM.config.error_headline).to eq("LLM request failed")
+    end
   end
 
   describe "Axn::RubyLLM.configure" do
@@ -31,6 +35,13 @@ RSpec.describe "Axn::RubyLLM configuration" do
       Axn::RubyLLM.configure { |c| c.default_model = "o3-mini" }
       Axn::RubyLLM.reset_config!
       expect(Axn::RubyLLM.config.default_model).to eq("gpt-4o-mini")
+    end
+  end
+
+  describe "#error_headline" do
+    it "is configurable via Axn::RubyLLM.configure" do
+      Axn::RubyLLM.configure { |c| c.error_headline = "Something went wrong calling the LLM" }
+      expect(Axn::RubyLLM.config.error_headline).to eq("Something went wrong calling the LLM")
     end
   end
 

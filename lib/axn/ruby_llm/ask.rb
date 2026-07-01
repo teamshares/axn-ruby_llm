@@ -35,11 +35,12 @@ module Axn
       }
 
       # Base headlines for a consistent result.error / result.success surface: failures read
-      # "LLM request failed: <reason>"; successes read "LLM request completed", with any detail
-      # attached parenthetically via join: (e.g. the stubbed-values note on the disabled path below).
+      # "<error_headline>: <reason>" (configurable via Axn::RubyLLM.configure); successes read
+      # "LLM request completed", with any detail attached parenthetically via join: (e.g. the
+      # stubbed-values note on the disabled path below).
       # Reason entries are ordered most-specific-last (axn checks most-recently-declared first), so a
       # narrower match (retryable, context length, JSON parse) wins over the generic KNOWN_ERROR catch-all.
-      error "LLM request failed"
+      error { Axn::RubyLLM.config.error_headline }
       error(if: KNOWN_ERROR, &:message)
       error(if: RETRYABLE_ERROR) { |e| "Provider temporarily unavailable, try again later: #{e.message}" }
       error(if: ::RubyLLM::ContextLengthExceededError) { |e| "Prompt exceeds the model's context window: #{e.message}" }

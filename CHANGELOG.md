@@ -8,6 +8,8 @@ Narrows the generic exception-message fallback in `Ask`'s error DSL and adds two
 - **New: `RubyLLM::OverloadedError` / `ServiceUnavailableError` / `ServerError`** (5xx, transient provider-side issues) now fail with `"LLM request failed: Provider temporarily unavailable, try again later: <message>"`, distinguishing them from non-retryable errors. `RubyLLM::RateLimitError` keeps its own distinct `"Rate limit reached: <message>"` wording (unchanged).
 - **New: `RubyLLM::ContextLengthExceededError`** now fails with `"LLM request failed: Prompt exceeds the model's context window: <message>"` — the provider's own message (which includes the actual token counts) is preserved after the actionable prefix.
 
+Adds a new `error_headline` setting (default `"LLM request failed"`) to `Axn::RubyLLM.configure`, so the base `result.error` prefix is overridable without subclassing `Ask`.
+
 ## [0.1.3] - 2026-06-26
 
 Adopts Axn's `Configurable` DSL for gem configuration (requires the axn version that ships `Axn::Configurable`).

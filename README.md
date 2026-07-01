@@ -37,7 +37,8 @@ Optionally configure gem-level defaults:
 
 ```ruby
 Axn::RubyLLM.configure do |c|
-  c.default_model = "gpt-4o-mini" # default; override with any RubyLLM model ID
+  c.default_model = "gpt-4o-mini"          # default; override with any RubyLLM model ID
+  c.error_headline = "LLM request failed"  # default; prefixes every result.error (see Errors below)
 end
 ```
 

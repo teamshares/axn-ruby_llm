@@ -13,6 +13,7 @@ module Axn
 
     setting :default_model, default: "gpt-4o-mini"
     setting :enabled, default: true, callable: true
+    setting :error_headline, default: "LLM request failed"
 
     mount_axn :ask, Ask
 
