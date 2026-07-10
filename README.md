@@ -119,6 +119,54 @@ Errors are handled via Axn's declarative `error` DSL. Every failure shares a con
 - Any other known RubyLLM error — `RubyLLM::Error` (auth, bad request, payment, etc.), `RubyLLM::ConfigurationError`, `ModelNotFoundError`, `PromptNotFoundError`, `InvalidRoleError`, `InvalidToolChoiceError`, `UnsupportedAttachmentError` — or `Faraday::Error` (network/transport failure) → `"LLM request failed: <message>"`
 - Any other `StandardError` (i.e. not a recognized RubyLLM/network failure — most likely a bug) → `"LLM request failed"`, with no exception detail leaked into the message
 
+## Tool adapter — wrap any Axn as a RubyLLM::Tool
+
+`Axn::RubyLLM.wrap` turns any Axn — no adapter-specific mixin required — into a `::RubyLLM::Tool` a chat can call:
+
+```ruby
+class CreateWidget
+  include Axn
+
+  axn_name "create_widget"
+  description "Creates a widget with the given name"
+
+  expects :name, type: String
+  exposes :widget_id
+
+  def call
+    expose widget_id: Widget.create!(name:).id
+  end
+end
+
+chat = RubyLLM.chat.with_tool(Axn::RubyLLM.wrap(CreateWidget))
+chat.ask("Create a widget called Sprocket")
+```
+
+The tool's name, description, and JSON Schema parameters come straight from the Axn's own declared contract (`resolved_axn_name`, `description`, `input_schema`). On success, `execute` returns the exposed values as a JSON-safe Hash (`Axn::Reflection::Values.serialize_exposed`); on failure, `{ error: result.error }`. The same `CreateWidget` class can be wrapped for other transports (e.g. `Axn::MCP.wrap`) with no changes — the contract is declared once.
+
+Options, settable either per-call via `wrap` keywords or once on the Axn via `set_extension_metadata(:ruby_llm, ...)` (a `wrap` keyword wins when both are present):
+
+| Option | Effect |
+|---|---|
+| `halt_after:` | When `true`, wraps a successful payload in `RubyLLM::Tool::Halt` to stop the agent loop after this call. Default `false`. |
+| `provider_params:` | Hash forwarded to the tool's `with_params` (provider-specific extras). Default `{}`. |
+| `render_as:` | `:structured` (default) returns the exposed-values Hash; `:text` returns `result.message` instead. |
+
+```ruby
+CreateWidget.set_extension_metadata(:ruby_llm, halt_after: true)
+Axn::RubyLLM.wrap(CreateWidget) # halts after running
+
+Axn::RubyLLM.wrap(CreateWidget, halt_after: false) # per-call override
+```
+
+Pass `ambient_context:` to close over explicit caller context (e.g. `current_user`, `company`) instead of relying on the reflective `Current` default — required when the tool may run outside the request that registered it (e.g. via `call_async`), since ambient context does not cross that boundary:
+
+```ruby
+Axn::RubyLLM.wrap(CreateWidget, ambient_context: { company_id: current_company.id })
+```
+
+Passing `ambient_context:` returns a tool **instance** (closing over that context) rather than the tool class, since `chat.with_tool` accepts either.
+
 ## Testing
 
 In your specs, require the helpers and use `stub_axn_ruby_llm`:
