@@ -30,12 +30,14 @@ module Axn
         private
 
         def build_tool_class(axn_class, halt_after:, provider_params:, render_as:, ambient_context:)
+          tool_name = sanitize_tool_name(axn_class.resolved_axn_name)
+
           Class.new(::RubyLLM::Tool) do
             description(axn_class.description) if axn_class.description
             params(axn_class.input_schema)
             with_params(**provider_params) if provider_params.any?
 
-            define_method(:name) { axn_class.resolved_axn_name }
+            define_method(:name) { tool_name }
 
             define_method(:execute) do |**args|
               call_args = ambient_context.equal?(NOT_SET) ? args : args.merge(ambient_context:)
@@ -47,6 +49,15 @@ module Axn
               halt_after ? halt(payload) : payload
             end
           end
+        end
+
+        # `resolved_axn_name` is a free-form display string (e.g. a namespaced class name like
+        # `Some::Nested::Widget`, or the "Anonymous Axn" fallback) — providers require tool names
+        # matching `^[a-zA-Z0-9_-]+$`, so it can't be registered as-is (bypassing RubyLLM's own
+        # class-name-derived sanitization, since we override `#name` outright).
+        def sanitize_tool_name(value)
+          sanitized = value.to_s.gsub(/[^a-zA-Z0-9_-]/, "_").downcase
+          sanitized.empty? ? "tool" : sanitized
         end
       end
     end

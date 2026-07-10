@@ -142,7 +142,7 @@ chat = RubyLLM.chat.with_tool(Axn::RubyLLM.wrap(CreateWidget))
 chat.ask("Create a widget called Sprocket")
 ```
 
-The tool's name, description, and JSON Schema parameters come straight from the Axn's own declared contract (`resolved_axn_name`, `description`, `input_schema`). On success, `execute` returns the exposed values as a JSON-safe Hash (`Axn::Reflection::Values.serialize_exposed`); on failure, `{ error: result.error }`. The same `CreateWidget` class can be wrapped for other transports (e.g. `Axn::MCP.wrap`) with no changes — the contract is declared once.
+The tool's name, description, and JSON Schema parameters come straight from the Axn's own declared contract (`resolved_axn_name`, `description`, `input_schema`) — sanitized to `[a-zA-Z0-9_-]` (providers require API-safe tool names), so an Axn without a declared `axn_name` still works, just with a less legible name (e.g. `Admin::CreateWidget` → `admin__createwidget`). On success, `execute` returns the exposed values as a JSON-safe Hash (`Axn::Reflection::Values.serialize_exposed`); on failure, `{ error: result.error }`. The same `CreateWidget` class can be wrapped for other transports (e.g. `Axn::MCP.wrap`) with no changes — the contract is declared once.
 
 Options, settable either per-call via `wrap` keywords or once on the Axn via `set_extension_metadata(:ruby_llm, ...)` (a `wrap` keyword wins when both are present):
 

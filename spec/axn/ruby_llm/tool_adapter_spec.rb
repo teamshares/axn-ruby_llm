@@ -52,6 +52,39 @@ RSpec.describe Axn::RubyLLM do
       end
     end
 
+    describe "tool naming" do
+      it "sanitizes a namespaced class name (no axn_name declared) into an API-safe tool name" do
+        namespaced = Class.new do
+          include Axn
+
+          expects :name, type: String
+          exposes :greeting
+
+          def call
+            expose greeting: "hi"
+          end
+        end
+        stub_const("Some::Nested::Widget", namespaced)
+
+        expect(described_class.wrap(Some::Nested::Widget).new.name).to eq("some__nested__widget")
+      end
+
+      it "sanitizes the anonymous-class fallback name" do
+        anonymous = Class.new do
+          include Axn
+
+          expects :name, type: String
+          exposes :greeting
+
+          def call
+            expose greeting: "hi"
+          end
+        end
+
+        expect(described_class.wrap(anonymous).new.name).to eq("anonymous_axn")
+      end
+    end
+
     describe "#execute" do
       subject(:tool) { described_class.wrap(greeter).new }
 
