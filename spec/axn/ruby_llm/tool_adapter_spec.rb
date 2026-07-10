@@ -101,6 +101,34 @@ RSpec.describe Axn::RubyLLM do
         expect(greeter).not_to receive(:call)
         expect(tool.execute).to eq(error: "Invalid tool arguments: missing keyword: name")
       end
+
+      it "returns RubyLLM's invalid-arguments error for an argument outside the schema, without invoking the Axn" do
+        expect(greeter).not_to receive(:call)
+        expect(tool.execute(name: "Ada", extra: "haha")).to eq(error: "Invalid tool arguments: unknown keyword: extra")
+      end
+    end
+
+    describe "security: a provider-supplied ambient_context must never override the caller's context" do
+      let(:ambient_axn) do
+        Class.new do
+          include Axn
+
+          expects :company_id, on: :ambient_context
+          exposes :company_id
+
+          def call
+            expose company_id:
+          end
+        end
+      end
+
+      it "rejects an ambient_context key smuggled in through tool args, without invoking the Axn" do
+        tool = described_class.wrap(ambient_axn).new
+        expect(ambient_axn).not_to receive(:call)
+        expect(tool.execute(ambient_context: { company_id: "attacker" })).to eq(
+          error: "Invalid tool arguments: unknown keyword: ambient_context",
+        )
+      end
     end
 
     describe "halt_after:" do

@@ -31,18 +31,19 @@ module Axn
 
         def build_tool_class(axn_class, halt_after:, provider_params:, render_as:, ambient_context:)
           tool_name = sanitize_tool_name(axn_class.resolved_axn_name)
-          required_args = Array(axn_class.input_schema[:required]).map(&:to_sym)
+          input_schema = axn_class.input_schema
+          validate_args = tool_argument_validator(input_schema)
 
           Class.new(::RubyLLM::Tool) do
             description(axn_class.description) if axn_class.description
-            params(axn_class.input_schema)
+            params(input_schema)
             with_params(**provider_params) if provider_params.any?
 
             define_method(:name) { tool_name }
 
             define_method(:execute) do |**args|
-              missing = required_args - args.keys
-              next({ error: "Invalid tool arguments: missing keyword: #{missing.first}" }) if missing.any?
+              error = validate_args.call(args)
+              next({ error: }) if error
 
               call_args = ambient_context.equal?(NOT_SET) ? args : args.merge(ambient_context:)
               result = axn_class.call(**call_args)
@@ -52,6 +53,26 @@ module Axn
               payload = render_as == :text ? result.message : Axn::Reflection::Values.serialize_exposed(result, axn_class.external_field_configs)
               halt_after ? halt(payload) : payload
             end
+          end
+        end
+
+        # `allowed_args` deliberately excludes `ambient_context` (core's reflected input_schema never
+        # advertises it) — so a smuggled-in `ambient_context:` tool arg (e.g. prompt injection
+        # attempting to run this call under a different tenant's context) is rejected by the returned
+        # validator rather than reaching `axn_class.call`, where it would silently replace the
+        # caller's own ambient context.
+        def tool_argument_validator(input_schema)
+          required_args = Array(input_schema[:required]).map(&:to_sym)
+          allowed_args = input_schema.fetch(:properties, {}).keys.map(&:to_sym)
+
+          lambda do |args|
+            missing = required_args - args.keys
+            next "Invalid tool arguments: missing keyword: #{missing.first}" if missing.any?
+
+            unknown = args.keys - allowed_args
+            next "Invalid tool arguments: unknown keyword: #{unknown.first}" if unknown.any?
+
+            nil
           end
         end
 
