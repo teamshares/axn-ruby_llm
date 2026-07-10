@@ -31,6 +31,7 @@ module Axn
 
         def build_tool_class(axn_class, halt_after:, provider_params:, render_as:, ambient_context:)
           tool_name = sanitize_tool_name(axn_class.resolved_axn_name)
+          required_args = Array(axn_class.input_schema[:required]).map(&:to_sym)
 
           Class.new(::RubyLLM::Tool) do
             description(axn_class.description) if axn_class.description
@@ -40,6 +41,9 @@ module Axn
             define_method(:name) { tool_name }
 
             define_method(:execute) do |**args|
+              missing = required_args - args.keys
+              next({ error: "Invalid tool arguments: missing keyword: #{missing.first}" }) if missing.any?
+
               call_args = ambient_context.equal?(NOT_SET) ? args : args.merge(ambient_context:)
               result = axn_class.call(**call_args)
 

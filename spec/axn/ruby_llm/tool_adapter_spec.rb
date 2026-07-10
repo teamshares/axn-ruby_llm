@@ -96,6 +96,11 @@ RSpec.describe Axn::RubyLLM do
         failing_tool = described_class.wrap(failer).new
         expect(failing_tool.execute(name: "nobody")).to eq(error: "Couldn't greet: no name allowed")
       end
+
+      it "returns RubyLLM's invalid-arguments error for a missing required field, without invoking the Axn" do
+        expect(greeter).not_to receive(:call)
+        expect(tool.execute).to eq(error: "Invalid tool arguments: missing keyword: name")
+      end
     end
 
     describe "halt_after:" do
