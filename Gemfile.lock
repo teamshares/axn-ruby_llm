@@ -1,6 +1,6 @@
 GIT
   remote: https://github.com/teamshares/axn.git
-  revision: 9faec1705d7e8ff6d7f841e9cda66144522b68ad
+  revision: 19afb59de9ac45b6d01c1d44dfc9b94469b36849
   branch: main
   specs:
     axn (0.1.0.pre.alpha.4.3)

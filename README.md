@@ -169,6 +169,17 @@ Axn::RubyLLM.wrap(CreateWidget, ambient_context: { company_id: current_company.i
 
 Passing `ambient_context:` returns a tool **instance** (closing over that context) rather than the tool class, since `chat.with_tool` accepts either.
 
+### Date/Time/Symbol/Integer/Float fields — declare `coerce:`
+
+A provider always sends tool-call arguments as JSON, so a `Date`/`Time`/`DateTime`/`Symbol`/`Integer`/`Float`-typed field arrives as a **String** (e.g. `"2026-07-08"`), which the plain `type:` validator rejects — it checks `value.is_a?(klass)`, not a parse. Declare `coerce:` on that `expects` field so axn parses the wire string before validation runs (added in [axn#148](https://github.com/teamshares/axn/pull/148)):
+
+```ruby
+expects :scheduled_for, coerce: Date          # sugar for type: { klass: Date, coerce: true }
+expects :priority, type: { klass: Symbol, coerce: true } # explicit form, e.g. alongside other type: options
+```
+
+Opt-in per field — a field with no `coerce:` is unaffected. A non-String value (a direct Ruby caller's real `Date`, a JSON-native number) is left untouched either way.
+
 ## Testing
 
 In your specs, require the helpers and use `stub_axn_ruby_llm`:
