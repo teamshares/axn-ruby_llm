@@ -88,8 +88,8 @@ RSpec.describe Axn::RubyLLM do
     describe "#execute" do
       subject(:tool) { described_class.wrap(greeter).new }
 
-      it "runs the Axn and returns the exposed values as a JSON-safe Hash on success" do
-        expect(tool.execute(name: "Ada")).to eq("greeting" => "Hello, Ada!")
+      it "runs the Axn and returns the exposed values as a JSON string on success" do
+        expect(tool.execute(name: "Ada")).to eq({ "greeting" => "Hello, Ada!" }.to_json)
       end
 
       it "returns { error: } on failure, without running the tool's success path" do
@@ -136,7 +136,7 @@ RSpec.describe Axn::RubyLLM do
         tool = described_class.wrap(greeter, halt_after: true).new
         result = tool.execute(name: "Ada")
         expect(result).to be_a(RubyLLM::Tool::Halt)
-        expect(result.content).to eq("greeting" => "Hello, Ada!")
+        expect(result.content).to eq({ "greeting" => "Hello, Ada!" }.to_json)
       end
 
       it "does not halt by default" do
@@ -158,9 +158,9 @@ RSpec.describe Axn::RubyLLM do
     end
 
     describe "render_as:" do
-      it "returns the exposed values Hash by default (:structured)" do
+      it "returns the exposed values as a JSON string by default (:structured)" do
         tool = described_class.wrap(greeter).new
-        expect(tool.execute(name: "Ada")).to eq("greeting" => "Hello, Ada!")
+        expect(tool.execute(name: "Ada")).to eq({ "greeting" => "Hello, Ada!" }.to_json)
       end
 
       it "returns result.message when declared :text via extension_metadata" do
@@ -217,7 +217,7 @@ RSpec.describe Axn::RubyLLM do
 
       it "threads the closed-over ambient_context into every call" do
         tool = described_class.wrap(ambient_axn, ambient_context: { company_id: 42 })
-        expect(tool.execute).to eq("company_id" => 42)
+        expect(tool.execute).to eq({ "company_id" => 42 }.to_json)
       end
     end
   end

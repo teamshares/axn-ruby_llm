@@ -50,7 +50,15 @@ module Axn
 
               next({ error: result.error }) unless result.ok?
 
-              payload = render_as == :text ? result.message : Axn::Reflection::Values.serialize_exposed(result, axn_class.external_field_configs)
+              # RubyLLM::Chat#handle_tool_calls only treats a Content/Content::Raw return as-is; any
+              # other object (including a plain Hash) gets `#to_s`'d before being sent to the provider
+              # -- which for a Hash produces Ruby's inspect syntax (`{"k"=>"v"}`), not JSON. Serialize
+              # structured payloads ourselves so the wire form is always valid JSON.
+              payload = if render_as == :text
+                          result.message
+                        else
+                          Axn::Reflection::Values.serialize_exposed(result, axn_class.external_field_configs).to_json
+                        end
               halt_after ? halt(payload) : payload
             end
           end

@@ -142,7 +142,9 @@ chat = RubyLLM.chat.with_tool(Axn::RubyLLM.wrap(CreateWidget))
 chat.ask("Create a widget called Sprocket")
 ```
 
-The tool's name, description, and JSON Schema parameters come straight from the Axn's own declared contract (`resolved_axn_name`, `description`, `input_schema`) — sanitized to `[a-zA-Z0-9_-]` (providers require API-safe tool names), so an Axn without a declared `axn_name` still works, just with a less legible name (e.g. `Admin::CreateWidget` → `admin__createwidget`). A tool call missing a required argument, or carrying one outside the advertised schema (including a smuggled-in `ambient_context:`, which is never advertised), returns RubyLLM's own `{ error: "Invalid tool arguments: ..." }` without invoking the Axn at all — it never reaches Axn's own (dev-facing-by-default) input validation, and it can never override the caller's ambient context. On success, `execute` returns the exposed values as a JSON-safe Hash (`Axn::Reflection::Values.serialize_exposed`); on failure, `{ error: result.error }`. The same `CreateWidget` class can be wrapped for other transports (e.g. `Axn::MCP.wrap`) with no changes — the contract is declared once.
+The tool's name, description, and JSON Schema parameters come straight from the Axn's own declared contract (`resolved_axn_name`, `description`, `input_schema`) — sanitized to `[a-zA-Z0-9_-]` (providers require API-safe tool names), so an Axn without a declared `axn_name` still works, just with a less legible name (e.g. `Admin::CreateWidget` → `admin__createwidget`). A tool call missing a required argument, or carrying one outside the advertised schema (including a smuggled-in `ambient_context:`, which is never advertised), returns RubyLLM's own `{ error: "Invalid tool arguments: ..." }` without invoking the Axn at all — it never reaches Axn's own (dev-facing-by-default) input validation, and it can never override the caller's ambient context.
+
+On success, `execute` returns the exposed values (`Axn::Reflection::Values.serialize_exposed`) as a JSON **string**, not a Hash — `RubyLLM::Chat#handle_tool_calls` only passes a `Content`/`Content::Raw` return through as-is, and otherwise sends `tool_payload.to_s`, which for a Hash produces Ruby's inspect syntax rather than JSON; on failure, `{ error: result.error }`. The same `CreateWidget` class can be wrapped for other transports (e.g. `Axn::MCP.wrap`) with no changes — the contract is declared once.
 
 Options, settable either per-call via `wrap` keywords or once on the Axn via `set_extension_metadata(:ruby_llm, ...)` (a `wrap` keyword wins when both are present):
 
@@ -150,7 +152,7 @@ Options, settable either per-call via `wrap` keywords or once on the Axn via `se
 |---|---|
 | `halt_after:` | When `true`, wraps a successful payload in `RubyLLM::Tool::Halt` to stop the agent loop after this call. Default `false`. |
 | `provider_params:` | Hash forwarded to the tool's `with_params` (provider-specific extras). Default `{}`. |
-| `render_as:` | `:structured` (default) returns the exposed-values Hash; `:text` returns `result.message` instead. |
+| `render_as:` | `:structured` (default) returns the exposed values as a JSON string; `:text` returns `result.message` instead. |
 
 ```ruby
 CreateWidget.set_extension_metadata(:ruby_llm, halt_after: true)
