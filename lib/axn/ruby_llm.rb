@@ -5,7 +5,6 @@ require "axn"
 
 require_relative "ruby_llm/version"
 require_relative "ruby_llm/ask"
-require_relative "ruby_llm/tool_adapter"
 
 module Axn
   module RubyLLM
@@ -45,3 +44,5 @@ module Axn
     end
   end
 end
+
+require_relative "ruby_llm/tool_adapter"

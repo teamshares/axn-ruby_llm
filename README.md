@@ -146,7 +146,7 @@ The tool's name, description, and JSON Schema parameters come straight from the 
 
 On success, `execute` returns the exposed values (`Axn::Reflection::Values.serialize_exposed`) as a JSON **string**, not a Hash — `RubyLLM::Chat#handle_tool_calls` only passes a `Content`/`Content::Raw` return through as-is, and otherwise sends `tool_payload.to_s`, which for a Hash produces Ruby's inspect syntax rather than JSON; on failure, `{ error: result.error }`. The same `CreateWidget` class can be wrapped for other transports (e.g. `Axn::MCP.wrap`) with no changes — the contract is declared once.
 
-Options, settable either per-call via `wrap` keywords or once on the Axn via `set_extension_metadata(:ruby_llm, ...)` (a `wrap` keyword wins when both are present):
+Options, settable either per-call via `wrap` keywords or once on the Axn via axn's namespaced per-class `configure(:ruby_llm) { |c| ... }` (added in [axn#154](https://github.com/teamshares/axn/pull/154); a `wrap` keyword wins when both are present, then the class-level `configure(:ruby_llm)` value, then this gem's own `Axn::RubyLLM.configure { |c| ... }` global, then the default below):
 
 | Option | Effect |
 |---|---|
@@ -155,10 +155,22 @@ Options, settable either per-call via `wrap` keywords or once on the Axn via `se
 | `render_as:` | `:structured` (default) returns the exposed values as a JSON string; `:text` returns `result.message` instead. |
 
 ```ruby
-CreateWidget.set_extension_metadata(:ruby_llm, halt_after: true)
+CreateWidget.configure(:ruby_llm) { |c| c.halt_after = true }
 Axn::RubyLLM.wrap(CreateWidget) # halts after running
 
 Axn::RubyLLM.wrap(CreateWidget, halt_after: false) # per-call override
+```
+
+`configure(:ruby_llm)` needs no `include` on `CreateWidget` — every Axn gets it for free (core's namespaced per-class config). That's what lets **one base Axn be configured for multiple adapters at once**, each in its own namespace, without collision even when two adapters happen to share a setting name:
+
+```ruby
+class CreateWidget
+  include Axn
+  # ...
+
+  configure(:ruby_llm) { |c| c.halt_after = true }
+  configure(:mcp)      { |c| c.text_content = :structured } # a different adapter's own namespace; independent
+end
 ```
 
 Pass `ambient_context:` to close over explicit caller context (e.g. `current_user`, `company`) instead of relying on the reflective `Current` default — required when the tool may run outside the request that registered it (e.g. via `call_async`), since ambient context does not cross that boundary:

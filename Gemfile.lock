@@ -1,6 +1,6 @@
 GIT
   remote: https://github.com/teamshares/axn.git
-  revision: 19afb59de9ac45b6d01c1d44dfc9b94469b36849
+  revision: 4b19fba73d8cc97f934b8082fb1a900b507ba16c
   branch: main
   specs:
     axn (0.1.0.pre.alpha.4.3)
@@ -52,7 +52,7 @@ GEM
       faraday (~> 2.0)
     i18n (1.15.2)
       concurrent-ruby (~> 1.0)
-    json (2.20.0)
+    json (2.21.1)
     language_server-protocol (3.17.0.5)
     lint_roller (1.1.0)
     logger (1.7.0)

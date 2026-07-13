@@ -163,16 +163,19 @@ RSpec.describe Axn::RubyLLM do
         expect(tool.execute(name: "Ada")).to eq({ "greeting" => "Hello, Ada!" }.to_json)
       end
 
-      it "returns result.message when declared :text via extension_metadata" do
-        greeter.set_extension_metadata(:ruby_llm, render_as: :text)
+      it "returns result.message when declared :text via configure(:ruby_llm)" do
+        greeter.configure(:ruby_llm) { |c| c.render_as = :text }
         tool = described_class.wrap(greeter).new
         expect(tool.execute(name: "Ada")).to eq("Action completed successfully")
       end
     end
 
-    describe "declaring config via core's extension registry (set_extension_metadata)" do
+    describe "declaring config via axn's namespaced per-class configure(:ruby_llm)" do
       before do
-        greeter.set_extension_metadata(:ruby_llm, halt_after: true, provider_params: { foo: "bar" })
+        greeter.configure(:ruby_llm) do |c|
+          c.halt_after = true
+          c.provider_params = { foo: "bar" }
+        end
       end
 
       it "honors the declared halt_after" do
@@ -188,6 +191,16 @@ RSpec.describe Axn::RubyLLM do
       it "lets an explicit wrap() kwarg override the declared metadata" do
         tool = described_class.wrap(greeter, halt_after: false).new
         expect(tool.execute(name: "Ada")).not_to be_a(RubyLLM::Tool::Halt)
+      end
+    end
+
+    describe "composing multiple adapter namespaces on one base Axn" do
+      it "does not collide with a same-named setting configured under a different namespace" do
+        greeter.configure(:ruby_llm) { |c| c.halt_after = true }
+        greeter.configure(:mcp) { |c| c.halt_after = "unrelated value from a different adapter's namespace" }
+
+        tool = described_class.wrap(greeter).new
+        expect(tool.execute(name: "Ada")).to be_a(RubyLLM::Tool::Halt)
       end
     end
 

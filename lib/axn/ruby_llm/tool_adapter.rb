@@ -2,25 +2,31 @@
 
 module Axn
   module RubyLLM
+    # Namespaced per-class config (axn's `Axn::Configurable`, PRO-2880): any Axn — with no
+    # adapter-specific mixin required — can declare `configure(:ruby_llm) { |c| c.halt_after = true }`
+    # to set these per-class, alongside e.g. `configure(:mcp) { ... }` for a different adapter on the
+    # same class, without the two colliding. `wrap` resolves them via `resolve_override_for`, which
+    # falls back to this module's own global `config` (`Axn::RubyLLM.configure { |c| ... }`) and then
+    # to each setting's default — the same class-override-then-global-then-default chain a flat
+    # `overridable: true` accessor would give a single-adapter consumer.
+    config_namespace :ruby_llm
+    setting :halt_after, default: false, overridable: true
+    setting :provider_params, default: {}, overridable: true
+    setting :render_as, default: :structured, one_of: %i[structured text], overridable: true
+
     # Wraps any Axn as a ::RubyLLM::Tool: schema, name, and description are read straight off the
     # Axn's own declared contract (`input_schema` / `resolved_axn_name` / `description`, from axn's
     # core reflection), so a tool needs no adapter-specific mixin to be wrapped.
-    #
-    # `halt_after:` / `provider_params:` / `render_as:` can be declared once on the Axn itself via
-    # core's extension-metadata registry (`axn_class.set_extension_metadata(:ruby_llm, halt_after:
-    # true, provider_params: {...}, render_as: :text)`) and are overridable per-call via the matching
-    # `wrap` keyword.
     module ToolAdapter
       NOT_SET = Object.new.freeze
 
       class << self
         def wrap(axn_class, halt_after: nil, provider_params: nil, render_as: nil, ambient_context: NOT_SET)
-          metadata = axn_class.extension_metadata(:ruby_llm)
           tool_class = build_tool_class(
             axn_class,
-            halt_after: halt_after.nil? ? metadata.fetch(:halt_after, false) : halt_after,
-            provider_params: provider_params.nil? ? metadata.fetch(:provider_params, {}) : provider_params,
-            render_as: render_as.nil? ? metadata.fetch(:render_as, :structured) : render_as,
+            halt_after: halt_after.nil? ? Axn::RubyLLM.resolve_override_for(axn_class, :halt_after) : halt_after,
+            provider_params: provider_params.nil? ? Axn::RubyLLM.resolve_override_for(axn_class, :provider_params) : provider_params,
+            render_as: render_as.nil? ? Axn::RubyLLM.resolve_override_for(axn_class, :render_as) : render_as,
             ambient_context:,
           )
 
