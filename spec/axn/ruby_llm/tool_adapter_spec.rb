@@ -106,6 +106,28 @@ RSpec.describe Axn::RubyLLM do
         expect(greeter).not_to receive(:call)
         expect(tool.execute(name: "Ada", extra: "haha")).to eq(error: "Invalid tool arguments: unknown keyword: extra")
       end
+
+      it "returns RubyLLM's invalid-arguments error for a wrong-type argument, without invoking the Axn" do
+        expect(greeter).not_to receive(:call)
+        expect(tool.execute(name: 123)).to eq(error: "Invalid tool arguments: name must be a string")
+      end
+
+      it "allows a nil value for an optional (nullable) field" do
+        optional_axn = Class.new do
+          include Axn
+
+          expects :name, type: String
+          expects :nickname, type: String, optional: true
+          exposes :greeting
+
+          def call
+            expose greeting: nickname ? "Hello, #{nickname}!" : "Hello, #{name}!"
+          end
+        end
+
+        tool = described_class.wrap(optional_axn).new
+        expect(tool.execute(name: "Ada", nickname: nil)).to eq({ "greeting" => "Hello, Ada!" }.to_json)
+      end
     end
 
     describe "security: a provider-supplied ambient_context must never override the caller's context" do

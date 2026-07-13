@@ -75,9 +75,18 @@ module Axn
         # attempting to run this call under a different tenant's context) is rejected by the returned
         # validator rather than reaching `axn_class.call`, where it would silently replace the
         # caller's own ambient context.
+        #
+        # The value-type check below is deliberately shallow (top-level JSON type only, no nested
+        # properties/items/enum/format) — it exists only to catch an obviously wrong-shaped argument
+        # (e.g. `name: 123` for a String field) before it reaches Axn's own `expects` validation, which
+        # treats an un-`user_facing:` violation as a dev-facing exception (reported, generic message)
+        # rather than RubyLLM's clean, recoverable "Invalid tool arguments" response. A property whose
+        # allowed JSON type(s) can't be determined (no `type:`/`anyOf`, e.g. an enum-only or untyped
+        # field) is never blocked, so this can't reject a value Axn's own contract would accept.
         def tool_argument_validator(input_schema)
           required_args = Array(input_schema[:required]).map(&:to_sym)
-          allowed_args = input_schema.fetch(:properties, {}).keys.map(&:to_sym)
+          properties = input_schema.fetch(:properties, {})
+          allowed_args = properties.keys.map(&:to_sym)
 
           lambda do |args|
             missing = required_args - args.keys
@@ -86,8 +95,40 @@ module Axn
             unknown = args.keys - allowed_args
             next "Invalid tool arguments: unknown keyword: #{unknown.first}" if unknown.any?
 
+            mismatch = args.find { |key, value| !schema_value_matches?(properties[key], value) }
+            next "Invalid tool arguments: #{mismatch.first} must be a #{json_types_for(properties[mismatch.first]).join(" or ")}" if mismatch
+
             nil
           end
+        end
+
+        JSON_TYPE_PREDICATES = {
+          "string" => ->(v) { v.is_a?(String) },
+          "integer" => ->(v) { v.is_a?(Integer) },
+          "number" => ->(v) { v.is_a?(Numeric) },
+          "boolean" => ->(v) { [true, false].include?(v) },
+          "object" => ->(v) { v.is_a?(Hash) },
+          "array" => ->(v) { v.is_a?(Array) },
+          "null" => lambda(&:nil?),
+        }.freeze
+        private_constant :JSON_TYPE_PREDICATES
+
+        # The property's allowed JSON type(s), or nil when none can be determined (untyped, enum-only,
+        # or an anyOf with no member `type:`) — nil means "don't check", never "reject everything".
+        def json_types_for(prop)
+          return nil unless prop
+
+          return Array(prop[:type]) if prop[:type]
+          return prop[:anyOf].flat_map { |member| Array(member[:type]) }.uniq if prop[:anyOf]
+
+          nil
+        end
+
+        def schema_value_matches?(prop, value)
+          types = json_types_for(prop)
+          return true if types.nil? || types.empty?
+
+          types.any? { |type| JSON_TYPE_PREDICATES[type]&.call(value) }
         end
 
         # `resolved_axn_name` is a free-form display string (e.g. a namespaced class name like
