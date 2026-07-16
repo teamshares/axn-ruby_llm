@@ -110,6 +110,8 @@ result.raw_message     # => #<RubyLLM::Message ...>
 
 `cost` and `cost_breakdown` are both `nil` when RubyLLM lacks pricing for the model (e.g. unknown/custom endpoints). Token counts are nil only if the provider did not return them. `prompt_tokens` is nil only if all three input token fields are nil.
 
+### Errors
+
 Errors are handled via Axn's declarative `error` DSL. Every failure shares a consistent `"LLM request failed: <reason>"` headline (the headline itself is configurable via `c.error_headline =`, e.g. to `"Something went wrong calling the LLM"`; the reasons below are unaffected):
 - `JSON::ParserError` → `"LLM request failed: Response was not valid JSON"`
 - `RubyLLM::RateLimitError` (HTTP 429, provider-agnostic) → `"LLM request failed: Rate limit reached: <message>"`
@@ -159,15 +161,15 @@ Axn::RubyLLM.wrap(CreateWidget) # halts after running
 Axn::RubyLLM.wrap(CreateWidget, halt_after: false) # per-call override
 ```
 
-`configure(:ruby_llm)` needs no `include` on `CreateWidget` — every Axn gets it for free (core's namespaced per-class config). That's what lets **one base Axn be configured for multiple adapters at once**, each in its own namespace, without collision even when two adapters happen to share a setting name:
+`configure(:ruby_llm)` needs no `include` on `CreateWidget` — every Axn gets it for free (core's namespaced per-class config). That's what lets **one base Axn be configured for multiple adapters at once**, each in its own namespace, without collision even when two adapters share a setting name (both this gem and axn-mcp expose `present_as`):
 
 ```ruby
 class CreateWidget
   include Axn
   # ...
 
-  configure(:ruby_llm) { |c| c.halt_after = true }
-  configure(:mcp)      { |c| c.text_content = :structured } # a different adapter's own namespace; independent
+  configure(:ruby_llm) { |c| c.present_as = :message }    # how the RubyLLM tool presents its result
+  configure(:mcp)      { |c| c.present_as = :structured } # same setting name, different namespace — no collision
 end
 ```
 
@@ -221,7 +223,7 @@ The advertised tool schema is axn's reflected `input_schema`. A few things worth
 
 ## Testing
 
-In your specs, require the helpers and use `stub_axn_ruby_llm`:
+In your specs, require the helpers and use `stub_axn_ruby_llm` to stub RubyLLM so `Axn::RubyLLM.ask` returns a canned response without a real API call:
 
 ```ruby
 require "axn/ruby_llm/rspec"
@@ -232,6 +234,16 @@ it "summarizes the thread" do
   expect(result.response).to include("ship on Friday")
 end
 ```
+
+`response:` is the only required argument. A Hash response is auto-JSON-serialized for `json: true` calls; pass `schema:` to route a Hash through the schema path unparsed (and to assert the exact schema class). Token counts and cost default to zero and can be set explicitly to exercise cost/usage logic:
+
+```ruby
+stub_axn_ruby_llm(response: { "company_id" => 42 }, schema: CompanyMatch)
+stub_axn_ruby_llm(response: "...", model: "gpt-4o", input_tokens: 100, output_tokens: 50, cost: 0.0023)
+stub_axn_ruby_llm(response: "...", cache_read_tokens: 500, cache_write_tokens: 200)
+```
+
+Accepted keywords: `response:` (required), `model:`, `schema:`, `input_tokens:`, `output_tokens:`, `cache_read_tokens:`, `cache_write_tokens:`, `cost:`. Returns the stubbed chat instance double for further assertions if you need it.
 
 ## OpenTelemetry
 
