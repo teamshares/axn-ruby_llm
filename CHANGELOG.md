@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+> **Upgrade notes (behavior changes):**
+> - **`Ask` failure messages changed wording.** Code that pattern-matches on `result.error` strings may need updating: unrecognized exceptions no longer include the underlying exception message, and 5xx / context-length errors now have their own more specific text (see Changed below). `result.ok?`-based control flow is unaffected.
+> - **Requires a newer `axn`** — this release depends on core reflection, the tool registry + `tool_name`, and namespaced `configure(...)` (see Requires below).
+> - No public API was removed, and no config or `wrap` option changed name or default.
+
 ### Added
 
 - **Tool adapter — wrap any Axn as a `RubyLLM::Tool`.** `Axn::RubyLLM.wrap(any_axn)` turns any Axn into a `::RubyLLM::Tool` a chat can call, with no adapter-specific mixin: its name, description, and JSON Schema parameters come from the Axn's own `description`/`expects`/`exposes` contract. On success the tool returns the exposed values as JSON (or `result.message`, per `present_as:`); on failure, `{ error: <result.error> }`. Malformed tool calls — missing, unknown, or wrong-typed arguments, including an injected `ambient_context:` — are rejected with a clean `Invalid tool arguments` error before the Axn runs. Per-tool options `halt_after:`, `provider_params:`, `present_as:` (`:structured` / `:message`), and `ambient_context:` are settable per-call, per-class via `configure(:ruby_llm) { |c| ... }`, or gem-wide via `Axn::RubyLLM.configure`. The same Axn advertises an identical tool name whether wrapped here or by `Axn::MCP.wrap`. See the README's "Tool adapter" section.
