@@ -12,7 +12,7 @@ module Axn
     config_namespace :ruby_llm
     setting :halt_after, default: false, overridable: true
     setting :provider_params, default: {}, overridable: true
-    setting :render_as, default: :structured, one_of: %i[structured text], overridable: true
+    setting :present_as, default: :structured, one_of: %i[structured message], overridable: true
 
     # Wraps any Axn as a ::RubyLLM::Tool: schema, name, and description are read straight off the
     # Axn's own declared contract (`input_schema` / `resolved_axn_name` / `description`, from axn's
@@ -21,12 +21,14 @@ module Axn
       NOT_SET = Object.new.freeze
 
       class << self
-        def wrap(axn_class, halt_after: nil, provider_params: nil, render_as: nil, ambient_context: NOT_SET)
+        def wrap(axn_class, halt_after: nil, provider_params: nil, present_as: nil, render_as: NOT_SET, ambient_context: NOT_SET)
+          validate_present_as_kwargs!(present_as, render_as)
+
           tool_class = build_tool_class(
             axn_class,
             halt_after: halt_after.nil? ? Axn::RubyLLM.resolve_override_for(axn_class, :halt_after) : halt_after,
             provider_params: provider_params.nil? ? Axn::RubyLLM.resolve_override_for(axn_class, :provider_params) : provider_params,
-            render_as: render_as.nil? ? Axn::RubyLLM.resolve_override_for(axn_class, :render_as) : render_as,
+            present_as: present_as.nil? ? Axn::RubyLLM.resolve_override_for(axn_class, :present_as) : present_as,
             ambient_context:,
           )
 
@@ -35,7 +37,25 @@ module Axn
 
         private
 
-        def build_tool_class(axn_class, halt_after:, provider_params:, render_as:, ambient_context:)
+        # `render_as:` (values :structured/:text) was renamed to `present_as:` (:structured/:message)
+        # to unify the knob with axn-mcp's `present_as` (see DEPRECATIONS.md). Pre-1.0, so a leftover
+        # `render_as:` is a hard error with a pointer, not a silent shim (an ignored kwarg would quietly
+        # revert a caller to :structured). `one_of:` on the setting only guards the config-set path, so
+        # validate the `present_as` kwarg here too, pointing render_as's old `:text` value at its rename.
+        def validate_present_as_kwargs!(present_as, render_as)
+          unless render_as.equal?(NOT_SET)
+            raise ArgumentError,
+                  "`render_as:` was renamed to `present_as:` and its `:text` value to `:message` " \
+                  "(e.g. `Axn::RubyLLM.wrap(..., present_as: :message)`)."
+          end
+
+          return if present_as.nil? || %i[structured message].include?(present_as)
+
+          hint = present_as == :text ? " (the `:text` value was renamed to `:message`)" : ""
+          raise ArgumentError, "present_as must be one of :structured, :message; got #{present_as.inspect}#{hint}"
+        end
+
+        def build_tool_class(axn_class, halt_after:, provider_params:, present_as:, ambient_context:)
           # Core's canonical, provider-safe tool_name (PRO-2921): strips configured leading prefixes,
           # snake_cases with single underscores, restricts to [a-z0-9_], and is never blank (anonymous
           # -> "tool"). Replaces the old crude sanitize_tool_name gsub, whose namespaced output mangled
@@ -65,7 +85,7 @@ module Axn
               # other object (including a plain Hash) gets `#to_s`'d before being sent to the provider
               # -- which for a Hash produces Ruby's inspect syntax (`{"k"=>"v"}`), not JSON. Serialize
               # structured payloads ourselves so the wire form is always valid JSON.
-              payload = if render_as == :text
+              payload = if present_as == :message
                           result.message
                         else
                           Axn::Reflection::Values.serialize_exposed(result, axn_class.external_field_configs).to_json

@@ -234,16 +234,33 @@ RSpec.describe Axn::RubyLLM do
       end
     end
 
-    describe "render_as:" do
+    describe "present_as:" do
       it "returns the exposed values as a JSON string by default (:structured)" do
         tool = described_class.wrap(greeter).new
         expect(tool.execute(name: "Ada")).to eq({ "greeting" => "Hello, Ada!" }.to_json)
       end
 
-      it "returns result.message when declared :text via configure(:ruby_llm)" do
-        greeter.configure(:ruby_llm) { |c| c.render_as = :text }
+      it "returns result.message when declared :message via configure(:ruby_llm)" do
+        greeter.configure(:ruby_llm) { |c| c.present_as = :message }
         tool = described_class.wrap(greeter).new
         expect(tool.execute(name: "Ada")).to eq("Action completed successfully")
+      end
+
+      it "returns result.message when passed present_as: :message per-call" do
+        tool = described_class.wrap(greeter, present_as: :message).new
+        expect(tool.execute(name: "Ada")).to eq("Action completed successfully")
+      end
+    end
+
+    describe "the renamed render_as: kwarg (pre-1.0 hard drop)" do
+      it "raises a pointed migration error when render_as: is passed" do
+        expect { described_class.wrap(greeter, render_as: :text) }
+          .to raise_error(ArgumentError, /`render_as:` was renamed to `present_as:`.*`:text` value to `:message`/m)
+      end
+
+      it "points :text at :message when passed as present_as:" do
+        expect { described_class.wrap(greeter, present_as: :text) }
+          .to raise_error(ArgumentError, /present_as must be one of :structured, :message.*`:text` value was renamed to `:message`/m)
       end
     end
 

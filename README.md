@@ -150,7 +150,7 @@ Options, settable either per-call via `wrap` keywords or once on the Axn via axn
 |---|---|
 | `halt_after:` | When `true`, wraps a successful payload in `RubyLLM::Tool::Halt` to stop the agent loop after this call. Default `false`. |
 | `provider_params:` | Hash forwarded to the tool's `with_params` (provider-specific extras). Default `{}`. |
-| `render_as:` | `:structured` (default) returns the exposed values as a JSON string; `:text` returns `result.message` instead. |
+| `present_as:` | `:structured` (default) returns the exposed values as a JSON string; `:message` returns `result.message` instead. Same knob as axn-mcp's `present_as:`. |
 
 ```ruby
 CreateWidget.configure(:ruby_llm) { |c| c.halt_after = true }
