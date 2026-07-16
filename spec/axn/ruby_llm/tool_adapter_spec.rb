@@ -358,5 +358,19 @@ RSpec.describe Axn::RubyLLM do
       expect(tools).to all(be < RubyLLM::Tool)
       expect(tools.map { |t| t.new.name }).to include(ToolsHelper::Widget.tool_name)
     end
+
+    it "returns tools in deterministic tool_name order (core sorts tools_for, PRO-2933)" do
+      %w[Zebra Alpha Mango].each do |n|
+        stub_const("SortCheck::#{n}", Class.new do
+          include Axn
+
+          tool :ruby_llm
+          def call; end
+        end)
+      end
+
+      names = described_class.tools.map { |t| t.new.name }
+      expect(names).to eq(names.sort)
+    end
   end
 end
