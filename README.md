@@ -121,15 +121,13 @@ Errors are handled via Axn's declarative `error` DSL. Every failure shares a con
 
 ## Tool adapter — wrap any Axn as a RubyLLM::Tool
 
-`Axn::RubyLLM.wrap` turns any Axn — no adapter-specific mixin required — into a `::RubyLLM::Tool` a chat can call:
+`Axn::RubyLLM.wrap` turns any [Axn](https://github.com/teamshares/axn) — no adapter-specific mixin required — into a `::RubyLLM::Tool` a chat can call. It's just a normal Axn:
 
 ```ruby
 class CreateWidget
   include Axn
 
-  axn_name "create_widget"
   description "Creates a widget with the given name"
-
   expects :name, type: String
   exposes :widget_id
 
@@ -142,7 +140,7 @@ chat = RubyLLM.chat.with_tool(Axn::RubyLLM.wrap(CreateWidget))
 chat.ask("Create a widget called Sprocket")
 ```
 
-The tool's name, description, and JSON Schema parameters come straight from the Axn's own declared contract (`resolved_axn_name`, `description`, `input_schema`) — sanitized to `[a-zA-Z0-9_-]` (providers require API-safe tool names), so an Axn without a declared `axn_name` still works, just with a less legible name (e.g. `Admin::CreateWidget` → `admin__createwidget`). A tool call missing a required argument, carrying one outside the advertised schema (including a smuggled-in `ambient_context:`, which is never advertised), or supplying one of the wrong JSON type (e.g. a number where the schema declares a string), returns RubyLLM's own `{ error: "Invalid tool arguments: ..." }` without invoking the Axn at all — it never reaches Axn's own (dev-facing-by-default) input validation, and it can never override the caller's ambient context. The type check is deliberately shallow (top-level type only) and never blocks a property whose allowed type can't be determined from the schema (untyped/enum-only fields), so it can't reject anything Axn's own contract would accept.
+The tool's name, description, and JSON Schema parameters come straight from the Axn's own contract — the same `description`/`expects`/`exposes` you'd write for any Axn — so a minimal class just works (the tool name defaults from the class name: `CreateWidget` → `create_widget`). A tool call missing a required argument, carrying one outside the advertised schema (including a smuggled-in `ambient_context:`, which is never advertised), or supplying one of the wrong JSON type (e.g. a number where the schema declares a string), returns RubyLLM's own `{ error: "Invalid tool arguments: ..." }` without invoking the Axn at all — it never reaches Axn's own (dev-facing-by-default) input validation, and it can never override the caller's ambient context. The type check is deliberately shallow (top-level type only) and never blocks a property whose allowed type can't be determined from the schema (untyped/enum-only fields), so it can't reject anything Axn's own contract would accept.
 
 On success, `execute` returns the exposed values (`Axn::Reflection::Values.serialize_exposed`) as a JSON **string**, not a Hash — `RubyLLM::Chat#handle_tool_calls` only passes a `Content`/`Content::Raw` return through as-is, and otherwise sends `tool_payload.to_s`, which for a Hash produces Ruby's inspect syntax rather than JSON; on failure, `{ error: result.error }`. The same `CreateWidget` class can be wrapped for other transports (e.g. `Axn::MCP.wrap`) with no changes — the contract is declared once.
 
@@ -181,6 +179,26 @@ Axn::RubyLLM.wrap(CreateWidget, ambient_context: { company_id: current_company.i
 
 Passing `ambient_context:` returns a tool **instance** (closing over that context) rather than the tool class, since `chat.with_tool` accepts either.
 
+### Tool naming
+
+The name is axn core's canonical, provider-safe `tool_name`: lowercased to `[a-z0-9_]`, leading configured prefixes stripped, snake_cased with single underscores, and never blank (`Admin::CreateWidget` → `admin_create_widget`; a truly anonymous Axn → `"tool"`). Declare `axn_name "..."` on the Axn to override the default. Because it's the same core derivation every adapter uses, a class wrapped by both `Axn::RubyLLM.wrap` and `Axn::MCP.wrap` advertises an identical name — the contract is declared once.
+
+### Enumerating tools from the registry
+
+Rather than wiring each tool up by hand, let an Axn opt into the `:ruby_llm` adapter and build the whole chat tool list from axn core's tool registry:
+
+```ruby
+class CreateWidget
+  include Axn
+  tool :ruby_llm          # or a bare `tool` to join every registered adapter
+  # ...
+end
+
+chat = RubyLLM.chat.with_tools(*Axn::RubyLLM.tools)
+```
+
+`Axn::RubyLLM.tools` returns every opted-in Axn already wrapped as a `::RubyLLM::Tool` — sugar for `Axn.tools_for(:ruby_llm).map { |axn| Axn::RubyLLM.wrap(axn) }`. An Axn is a member if it declares `tool` / `tool :ruby_llm`, lives under a configured `tool_path` (`Axn.config.tool_paths`), or carries a `configure(:ruby_llm)` bag. Because both adapters read the registry and the same canonical `tool_name`, the identical set of Axns exposed via `Axn::MCP.tools` advertises identical names.
+
 ### Date/Time/Symbol/Integer/Float fields — declare `coerce:`
 
 A provider always sends tool-call arguments as JSON, so a `Date`/`Time`/`DateTime`/`Symbol`/`Integer`/`Float`-typed field arrives as a **String** (e.g. `"2026-07-08"`), which the plain `type:` validator rejects — it checks `value.is_a?(klass)`, not a parse. Declare `coerce:` on that `expects` field so axn parses the wire string before validation runs (added in [axn#148](https://github.com/teamshares/axn/pull/148)):
@@ -191,6 +209,15 @@ expects :priority, type: { klass: Symbol, coerce: true } # explicit form, e.g. a
 ```
 
 Opt-in per field — a field with no `coerce:` is unaffected. A non-String value (a direct Ruby caller's real `Date`, a JSON-native number) is left untouched either way.
+
+### Schema reflection — provider notes
+
+The advertised tool schema is axn's reflected `input_schema`. A few things worth knowing when you care how it lands at a specific provider (Gemini is the strictest — it runs a mandatory OpenAPI-subset converter; OpenAI and Anthropic pass the schema through as-is):
+
+- **Nullable/optional fields** — handled. axn reflects a nullable field as an array-valued `type` (`["integer", "null"]`); the adapter rewrites that to the equivalent `anyOf` form, because Gemini's converter can't read array-valued types and would otherwise collapse the field to `STRING`. No action needed on your part.
+- **Array fields — declare `of:`.** `expects :ids, type: Array` reflects to `{type: array}` with no `items`, so the element type isn't advertised (Gemini then assumes `string`; OpenAI *strict* mode requires `items`). Declare the element type — `expects :ids, type: Array, of: Integer` — to advertise `items` correctly.
+- **Enums are advertised — use the top-level `inclusion:` key.** `expects :color, type: String, inclusion: { in: %w[red green blue] }` reflects to `{ type: "string", enum: ["red", "green", "blue"] }`, so the model is told the allowed set (an `optional:` field keeps `null` in the enum; a dynamic `in: -> { ... }` is correctly skipped rather than guessed). Note this is the **top-level `inclusion:` option**, not `validate: { inclusion: ... }` — `validate:` is axn's custom-callable hook (it needs `with:`), so that spelling neither enforces nor reflects the set.
+- **Conditional expectations** (`expects :token, if: :use_token`) reflect to a JSON Schema `allOf`/`if`/`then` clause. Gemini's converter ignores it — the field degrades to plain-optional (safe: a valid call is never wrongly rejected, but the conditional isn't conveyed to the model). This gem doesn't set OpenAI's `strict` mode, so OpenAI tolerates `allOf` by default; if you opt into strict via `provider_params`, OpenAI will reject `allOf`. Either way, encoding the rule in `description:` is the portable option.
 
 ## Testing
 

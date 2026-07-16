@@ -3,6 +3,11 @@
 require "ruby_llm"
 require "axn"
 
+# Register the :ruby_llm tool adapter with axn core's process-global registry (PRO-2921) so
+# `Axn.tools_for(:ruby_llm)` is legal and any Axn can opt in via `tool :ruby_llm` or a
+# `configure(:ruby_llm)` bag. Idempotent (the registry backs on a Set).
+Axn.register_tool_adapter(:ruby_llm)
+
 require_relative "ruby_llm/version"
 require_relative "ruby_llm/ask"
 

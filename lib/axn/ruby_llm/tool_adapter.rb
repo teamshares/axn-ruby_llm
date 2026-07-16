@@ -36,8 +36,13 @@ module Axn
         private
 
         def build_tool_class(axn_class, halt_after:, provider_params:, render_as:, ambient_context:)
-          tool_name = sanitize_tool_name(axn_class.resolved_axn_name)
-          input_schema = axn_class.input_schema
+          # Core's canonical, provider-safe tool_name (PRO-2921): strips configured leading prefixes,
+          # snake_cases with single underscores, restricts to [a-z0-9_], and is never blank (anonymous
+          # -> "tool"). Replaces the old crude sanitize_tool_name gsub, whose namespaced output mangled
+          # word boundaries (agenttools__listcompanies). The same Axn class now wraps to the same name
+          # across every adapter -- Axn::MCP.wrap included -- which is the whole author-once point.
+          tool_name = axn_class.tool_name
+          input_schema = normalize_nullable_types(axn_class.input_schema)
           validate_args = tool_argument_validator(input_schema)
 
           Class.new(::RubyLLM::Tool) do
@@ -131,13 +136,32 @@ module Axn
           types.any? { |type| JSON_TYPE_PREDICATES[type]&.call(value) }
         end
 
-        # `resolved_axn_name` is a free-form display string (e.g. a namespaced class name like
-        # `Some::Nested::Widget`, or the "Anonymous Axn" fallback) — providers require tool names
-        # matching `^[a-zA-Z0-9_-]+$`, so it can't be registered as-is (bypassing RubyLLM's own
-        # class-name-derived sanitization, since we override `#name` outright).
-        def sanitize_tool_name(value)
-          sanitized = value.to_s.gsub(/[^a-zA-Z0-9_-]/, "_").downcase
-          sanitized.empty? ? "tool" : sanitized
+        # axn reflects a nullable/optional field as a JSON Schema array-valued `type`
+        # (e.g. `["integer", "null"]`). That's valid JSON Schema and OpenAI/Anthropic consume it
+        # fine, but RubyLLM's Gemini converter only recognizes anyOf-form nullability: it does
+        # `param_type_for_gemini(type)` with `type.to_s.downcase`, so an array `type` matches no
+        # case and falls through to STRING -- silently dropping both the declared type and the
+        # nullability. Rewrite every array-valued `type` into the equivalent `anyOf: [{type: ...}]`,
+        # which Gemini's `normalize_any_of_schema` collapses back to the real type + nullable, and
+        # which the other providers accept unchanged. Purely a wire-shape change: the admitted value
+        # set is identical, and the adapter's own validator (json_types_for) already reads anyOf.
+        #
+        # Builds new Hashes/Arrays throughout rather than mutating -- axn may hand back a memoized
+        # input_schema, and mutating it would corrupt every other reader.
+        def normalize_nullable_types(node)
+          case node
+          when Hash
+            rebuilt = node.to_h { |key, value| [key, normalize_nullable_types(value)] }
+            if rebuilt[:type].is_a?(Array)
+              types = rebuilt.delete(:type)
+              rebuilt[:anyOf] = types.map { |type| { type: } }
+            end
+            rebuilt
+          when Array
+            node.map { |value| normalize_nullable_types(value) }
+          else
+            node
+          end
         end
       end
     end
@@ -145,6 +169,15 @@ module Axn
     class << self
       def wrap(...)
         ToolAdapter.wrap(...)
+      end
+
+      # Every Axn registered as a :ruby_llm tool -- via `tool`/`tool :ruby_llm`, residency under a
+      # configured tool_path, or a `configure(:ruby_llm)` bag (see Axn::Tools::Registry#member?) --
+      # each already wrapped as a ::RubyLLM::Tool, so a consumer builds its whole chat tool list in
+      # one call: `chat.with_tools(*Axn::RubyLLM.tools)`. Mirrors the shared GemName.tools contract
+      # with Axn::MCP.tools; the same Axn class resolves to the same tool_name across both surfaces.
+      def tools
+        Axn.tools_for(:ruby_llm).map { |axn| wrap(axn) }
       end
     end
   end

@@ -38,8 +38,11 @@ RSpec.describe Axn::RubyLLM do
         expect(tool_class).to be < RubyLLM::Tool
       end
 
-      it "names the tool after the axn's resolved_axn_name" do
+      it "names the tool via core's canonical tool_name" do
+        # Locked to core `tool_name` (not the old crude sanitize_tool_name) so the same Axn class
+        # wraps to the same provider name across every adapter (Axn::MCP.wrap included) -- PRO-2924.
         expect(tool_class.new.name).to eq("greet")
+        expect(tool_class.new.name).to eq(greeter.tool_name)
       end
 
       it "carries the axn's description" do
@@ -50,10 +53,56 @@ RSpec.describe Axn::RubyLLM do
         expected = JSON.parse(greeter.input_schema.to_json)
         expect(tool_class.new.params_schema).to eq(expected)
       end
+
+      it "rewrites axn's array-valued nullable type into anyOf form so Gemini keeps the real type" do
+        # axn represents a nullable/optional field as `type: ["integer", "null"]`. RubyLLM's Gemini
+        # converter only understands anyOf-form nullability -- it stringifies an array `type` and
+        # falls through to STRING, silently dropping both the real type and the nullability. The
+        # adapter normalizes array `type` to the equivalent anyOf, which every provider handles.
+        nullable = Class.new do
+          include Axn
+
+          expects :count, type: Integer, optional: true
+          def call; end
+        end
+
+        schema = described_class.wrap(nullable).new.params_schema
+        expect(schema["properties"]["count"]).to eq(
+          "anyOf" => [{ "type" => "integer" }, { "type" => "null" }],
+        )
+      end
+
+      it "advertises an inclusion set as enum, and keeps it when the field is also nullable" do
+        # Core reflects a top-level `inclusion:` into JSON Schema `enum` (PRO-2842). The adapter just
+        # forwards input_schema, so enum flows through -- including alongside the nullable anyOf
+        # rewrite for an optional field (enum stays put, type becomes anyOf).
+        enum_axn = Class.new do
+          include Axn
+
+          expects :color, type: String, inclusion: { in: %w[red green blue] }
+          expects :shade, type: String, inclusion: { in: %w[light dark] }, optional: true
+          def call; end
+        end
+
+        props = described_class.wrap(enum_axn).new.params_schema["properties"]
+        expect(props["color"]).to eq("type" => "string", "enum" => %w[red green blue])
+        expect(props["shade"]).to eq(
+          "enum" => ["light", "dark", nil],
+          "anyOf" => [{ "type" => "string" }, { "type" => "null" }],
+        )
+      end
+
+      it "leaves RubyLLM's Parameter introspection (.parameters) empty -- the schema travels via params_schema" do
+        # We feed a raw JSON Schema Hash to `params(...)`, which populates params_schema_definition
+        # (what providers actually serialize -- see the params_schema assertion above) but NOT the
+        # `param` DSL's Parameter objects. Argument validation is handled by the adapter's own
+        # validator, so empty .parameters is correct behavior, not a missing feature (PRO-2924 #4).
+        expect(tool_class.new.parameters).to eq({})
+      end
     end
 
     describe "tool naming" do
-      it "sanitizes a namespaced class name (no axn_name declared) into an API-safe tool name" do
+      it "derives a clean, word-boundary-preserving name from a namespaced class via core tool_name" do
         namespaced = Class.new do
           include Axn
 
@@ -66,10 +115,13 @@ RSpec.describe Axn::RubyLLM do
         end
         stub_const("Some::Nested::Widget", namespaced)
 
-        expect(described_class.wrap(Some::Nested::Widget).new.name).to eq("some__nested__widget")
+        # Core tool_name snake_cases each segment with single underscores (no more crude
+        # "some__nested__widget" mangling), matching what Axn::MCP.wrap produces for the same class.
+        expect(described_class.wrap(Some::Nested::Widget).new.name).to eq("some_nested_widget")
+        expect(described_class.wrap(Some::Nested::Widget).new.name).to eq(Some::Nested::Widget.tool_name)
       end
 
-      it "sanitizes the anonymous-class fallback name" do
+      it "falls back to core tool_name's never-blank default for a truly anonymous class" do
         anonymous = Class.new do
           include Axn
 
@@ -81,7 +133,10 @@ RSpec.describe Axn::RubyLLM do
           end
         end
 
-        expect(described_class.wrap(anonymous).new.name).to eq("anonymous_axn")
+        # No axn_name, no class name -> core tool_name yields "tool" (its never-blank fallback),
+        # not the "Anonymous Axn" display sentinel the old sanitizer stringified.
+        expect(described_class.wrap(anonymous).new.name).to eq("tool")
+        expect(described_class.wrap(anonymous).new.name).to eq(anonymous.tool_name)
       end
     end
 
@@ -254,6 +309,54 @@ RSpec.describe Axn::RubyLLM do
         tool = described_class.wrap(ambient_axn, ambient_context: { company_id: 42 })
         expect(tool.execute).to eq({ "company_id" => 42 }.to_json)
       end
+    end
+  end
+
+  describe "tool registry integration (PRO-2924)" do
+    it "registers :ruby_llm as a tool adapter at load" do
+      expect(Axn::Tools::Registry.adapters).to include(:ruby_llm)
+    end
+
+    it "enumerates Axns that opt in via `tool :ruby_llm`" do
+      widget = Class.new do
+        include Axn
+
+        tool :ruby_llm
+        def call; end
+      end
+      stub_const("RegistryViaTool::Widget", widget)
+
+      expect(Axn.tools_for(:ruby_llm)).to include(RegistryViaTool::Widget)
+    end
+
+    it "enumerates Axns that opt in implicitly via configure(:ruby_llm)" do
+      widget = Class.new do
+        include Axn
+
+        configure(:ruby_llm) { |c| c.halt_after = true }
+        def call; end
+      end
+      stub_const("RegistryViaConfig::Widget", widget)
+
+      expect(Axn.tools_for(:ruby_llm)).to include(RegistryViaConfig::Widget)
+    end
+  end
+
+  describe ".tools" do
+    it "returns wrapped, ready-to-register RubyLLM tools for every :ruby_llm member" do
+      widget = Class.new do
+        include Axn
+
+        tool :ruby_llm
+        description "does a thing"
+        expects :x, type: String
+        def call; end
+      end
+      stub_const("ToolsHelper::Widget", widget)
+
+      tools = described_class.tools
+      expect(tools).to all(be < RubyLLM::Tool)
+      expect(tools.map { |t| t.new.name }).to include(ToolsHelper::Widget.tool_name)
     end
   end
 end
