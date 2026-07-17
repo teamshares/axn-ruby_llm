@@ -166,17 +166,23 @@ Options, settable either per-call via `wrap` keywords or once on the Axn via axn
 | Option | Effect |
 |---|---|
 | `halt_after:` | When `true`, wraps a successful payload in `RubyLLM::Tool::Halt` to stop the agent loop after this call. Default `false`. |
-| `provider_params:` | Hash forwarded to the tool's `with_params` (provider-specific extras). Default `{}`. |
+| `provider_params:` | Hash deep-merged into the tool definition sent to the provider (via RubyLLM's `with_params`) — an escape hatch for provider-specific tool fields RubyLLM doesn't model first-class (e.g. OpenAI `strict` function calling, Anthropic tool `cache_control`). Keys mirror that provider's tool shape. Default `{}`. |
 | `present_as:` | `:structured` (default) returns the exposed values as a JSON string; `:message` returns `result.message` instead. Same knob as axn-mcp's `present_as:`. |
 
-```ruby
-CreateWidget.configure(:ruby_llm) { |c| c.halt_after = true }
-Axn::RubyLLM.wrap(CreateWidget) # halts after running
+Set a default once on the Axn with `configure(:ruby_llm)`, and still override per call:
 
-Axn::RubyLLM.wrap(CreateWidget, halt_after: false) # per-call override
+```ruby
+class CreateWidget
+  include Axn
+  configure(:ruby_llm) { |c| c.halt_after = true }   # default for this tool
+  # ...
+end
+
+Axn::RubyLLM.wrap(CreateWidget)                      # halts after running
+Axn::RubyLLM.wrap(CreateWidget, halt_after: false)   # per-call override
 ```
 
-`configure(:ruby_llm)` needs no `include` on `CreateWidget` — every Axn gets it for free (core's namespaced per-class config). That's what lets **one base Axn be configured for multiple adapters at once**, each in its own namespace, without collision even when two adapters share a setting name (both this gem and axn-mcp expose `present_as`):
+`configure(:ruby_llm)` needs no `include` beyond `Axn` — every Axn gets it for free (core's namespaced per-class config). It's usually written in the class body as above, but since it's a plain class method you can also call it from outside — e.g. `SomeThirdPartyAxn.configure(:ruby_llm) { |c| ... }` in an initializer, to configure an Axn you don't own. Namespacing is what lets **one base Axn be configured for multiple adapters at once**, each in its own namespace, without collision even when two adapters share a setting name (both this gem and axn-mcp expose `present_as`):
 
 ```ruby
 class CreateWidget
@@ -188,7 +194,7 @@ class CreateWidget
 end
 ```
 
-Pass `ambient_context:` to close over explicit caller context (e.g. `current_user`, `company`) instead of relying on the reflective `Current` default — required when the tool may run outside the request that registered it (e.g. via `call_async`), since ambient context does not cross that boundary:
+Pass `ambient_context:` to close over explicit caller context (e.g. `current_user`, `company`) at wrap time, instead of relying on axn's reflective `Current`-based default resolved when the tool runs. This matters when the tool executes somewhere `Current` isn't the right context — e.g. the chat (and therefore the tool call) runs in a background job or a different thread than the request that built the tools:
 
 ```ruby
 Axn::RubyLLM.wrap(CreateWidget, ambient_context: { company_id: current_company.id })
@@ -256,21 +262,21 @@ In your specs, require the helpers and use `stub_axn_ruby_llm` to stub RubyLLM s
 require "axn/ruby_llm/rspec"
 
 it "summarizes the thread" do
-  stub_axn_ruby_llm(response: "The team agreed to ship on Friday.")
+  stub_axn_ruby_llm("The team agreed to ship on Friday.")
   result = Axn::RubyLLM.ask(prompt: "...")
   expect(result.response).to include("ship on Friday")
 end
 ```
 
-`response:` is the only required argument. A Hash response is auto-JSON-serialized for `json: true` calls; pass `schema:` to route a Hash through the schema path unparsed (and to assert the exact schema class). Token counts and cost default to zero and can be set explicitly to exercise cost/usage logic:
+The response is the only required argument — pass it positionally (as above) or as `response:`. A Hash response is auto-JSON-serialized for `json: true` calls; pass `schema:` to route a Hash through the schema path unparsed (and to assert the exact schema class). Token counts and cost default to zero and can be set explicitly to exercise cost/usage logic:
 
 ```ruby
-stub_axn_ruby_llm(response: { "company_id" => 42 }, schema: CompanyMatch)
-stub_axn_ruby_llm(response: "...", model: "gpt-4o", input_tokens: 100, output_tokens: 50, cost: 0.0023)
-stub_axn_ruby_llm(response: "...", cache_read_tokens: 500, cache_write_tokens: 200)
+stub_axn_ruby_llm({ "company_id" => 42 }, schema: CompanyMatch)
+stub_axn_ruby_llm("...", model: "gpt-4o", input_tokens: 100, output_tokens: 50, cost: 0.0023)
+stub_axn_ruby_llm("...", cache_read_tokens: 500, cache_write_tokens: 200)
 ```
 
-Accepted keywords: `response:` (required), `model:`, `schema:`, `input_tokens:`, `output_tokens:`, `cache_read_tokens:`, `cache_write_tokens:`, `cost:`. Returns the stubbed chat instance double for further assertions if you need it.
+Remaining keywords: `model:`, `schema:`, `input_tokens:`, `output_tokens:`, `cache_read_tokens:`, `cache_write_tokens:`, `cost:`. Returns the stubbed chat instance double for further assertions if you need it.
 
 ## OpenTelemetry
 
