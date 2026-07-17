@@ -29,6 +29,7 @@ RSpec.describe Axn::RubyLLM::Ask do
     allow(RubyLLM).to receive(:chat).and_return(chat_instance)
     allow(chat_instance).to receive(:with_instructions).and_return(chat_instance)
     allow(chat_instance).to receive(:with_params).and_return(chat_instance)
+    allow(chat_instance).to receive(:with_tools).and_return(chat_instance)
     allow(chat_instance).to receive(:ask).with(prompt).and_return(llm_response)
     allow(RubyLLM.models).to receive(:find).with(llm_model_id).and_return(llm_model_info)
     allow(llm_response).to receive(:cost).with(model: llm_model_info).and_return(llm_cost)
@@ -425,6 +426,44 @@ RSpec.describe Axn::RubyLLM::Ask do
         expect(result.response).to eq({ "stubbed" => true })
         expect(result.stubbed).to eq(true)
       end
+    end
+  end
+
+  describe "tools:" do
+    let(:widget) do
+      Class.new do
+        include Axn
+
+        description "creates a widget"
+        expects :name, type: String
+        def call; end
+      end
+    end
+
+    it "wraps a bare Axn class and registers it with the chat" do
+      registered = nil
+      allow(chat_instance).to receive(:with_tools) do |*tools|
+        registered = tools
+        chat_instance
+      end
+
+      described_class.call(prompt:, tools: [widget])
+
+      expect(registered).to all(be < RubyLLM::Tool)
+      expect(registered.map { |t| t.new.name }).to eq([widget.tool_name])
+    end
+
+    it "passes an already-wrapped tool through unchanged (e.g. one closed over ambient_context)" do
+      wrapped = Axn::RubyLLM.wrap(widget)
+      expect(chat_instance).to receive(:with_tools).with(wrapped).and_return(chat_instance)
+
+      described_class.call(prompt:, tools: [wrapped])
+    end
+
+    it "does not register tools when none are given" do
+      expect(chat_instance).not_to receive(:with_tools)
+
+      described_class.call(prompt:)
     end
   end
 end

@@ -11,6 +11,7 @@ module Axn
       expects :model, optional: true
       expects :system_prompt, optional: true
       expects :temperature, optional: true
+      expects :tools, optional: true
 
       exposes :response
       exposes :raw_message
@@ -153,11 +154,27 @@ module Axn
           c.with_schema(schema) if schema
           c.with_params(response_format: { type: "json_object" }) if json && !schema
           c.with_params(temperature:) if temperature
+          c.with_tools(*resolved_tools) if resolved_tools.any?
         end
       end
 
       def resolved_model
         model || Axn::RubyLLM.config.default_model
+      end
+
+      # `tools:` accepts a mix of bare Axn classes (wrapped here, so callers can pass their own Axns
+      # straight in) and already-wrapped `::RubyLLM::Tool`s -- a class or an instance, the latter being
+      # how you pass a tool that closed over explicit context via `Axn::RubyLLM.wrap(axn, ambient_context:)`.
+      # RubyLLM's `with_tools` accepts either a class or an instance, so wrapped classes register as-is.
+      def resolved_tools
+        Array(tools).map { |tool| _as_ruby_llm_tool(tool) }
+      end
+
+      def _as_ruby_llm_tool(tool)
+        return tool if tool.is_a?(::RubyLLM::Tool)
+        return tool if tool.is_a?(::Class) && tool < ::RubyLLM::Tool
+
+        Axn::RubyLLM.wrap(tool)
       end
 
       def record_otel_attributes!(input_tokens:, output_tokens:, cost:, response_model:, stubbed:)

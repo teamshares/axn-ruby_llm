@@ -49,8 +49,9 @@ module Axn
           else
             allow(::RubyLLM).to receive(:chat).and_return(chat_instance)
           end
-          allow(chat_instance).to receive(:with_instructions).and_return(chat_instance)
-          allow(chat_instance).to receive(:with_params).and_return(chat_instance)
+          %i[with_instructions with_params with_tools].each do |method|
+            allow(chat_instance).to receive(method).and_return(chat_instance)
+          end
           # Always stub with_schema so specs don't blow up if production code passes schema:
           # even when the helper is called without schema:. Use a tight matcher when schema
           # is known so the stub still validates the correct class is passed.

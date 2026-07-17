@@ -6,13 +6,15 @@ Part of the `axn-*` extension ecosystem — see also [axn-mcp](https://github.co
 
 ### Why use this over calling RubyLLM directly?
 
-Three things you'd otherwise build at every callsite:
+Four things you'd otherwise hand-build:
 
 1. **Structured error handling.** The Axn error DSL declaratively maps `RateLimitError`, `JSON::ParserError`, and generic `StandardError` to clean failure messages. Callers check `result.ok?` instead of wrapping every call in `begin/rescue`.
 
 2. **Production gating.** A single `c.enabled = -> { Rails.env.production? }` in an initializer stubs every LLM call in non-prod environments — no per-callsite guards needed. The stub is typed (`stubbed: true`, `input_tokens: 0`, etc.) so downstream code doesn't need to branch on it either.
 
 3. **Cost/token tracking, exposed automatically.** Every call exposes `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `prompt_tokens` (the total), `cost`, and `cost_breakdown` without you doing the `RubyLLM.models.find` lookup manually. If your app uses OpenTelemetry, these values are also set as attributes on the existing `axn.call` span — no configuration required.
+
+4. **Author-once tools.** `Axn::RubyLLM.wrap` turns any Axn into a `RubyLLM::Tool` your chat can call — reuse the same Axn classes you already expose through [axn-mcp](https://github.com/teamshares/axn-mcp), or plain Axns, with no rewrite. The tool's name, JSON Schema, and argument validation all come from the Axn's own contract.
 
 > **Scope note:** This gem covers the subset of RubyLLM functionality that [Teamshares](https://github.com/teamshares) uses internally — single-turn chat, structured output, basic observability, and wrapping Axns as tools. It is intentionally minimal rather than a full-featured wrapper. Feedback and pull requests to extend it are very welcome.
 
@@ -123,7 +125,7 @@ Errors are handled via Axn's declarative `error` DSL. Every failure shares a con
 
 ## Tool adapter — wrap any Axn as a RubyLLM::Tool
 
-`Axn::RubyLLM.wrap` turns any [Axn](https://github.com/teamshares/axn) — no adapter-specific mixin required — into a `::RubyLLM::Tool` a chat can call. It's just a normal Axn:
+Any [Axn](https://github.com/teamshares/axn) can be exposed as a `::RubyLLM::Tool` — no adapter-specific mixin required, it's just a normal Axn:
 
 ```ruby
 class CreateWidget
@@ -137,16 +139,29 @@ class CreateWidget
     expose widget_id: Widget.create!(name:).id
   end
 end
-
-chat = RubyLLM.chat.with_tool(Axn::RubyLLM.wrap(CreateWidget))
-chat.ask("Create a widget called Sprocket")
 ```
+
+Pass Axns to `Axn::RubyLLM.ask` via `tools:` and the model can call them as part of the request — RubyLLM runs the tool-call loop internally and `result.response` is the model's final reply:
+
+```ruby
+result = Axn::RubyLLM.ask(
+  prompt: "Create a widget called Sprocket, then tell me its id.",
+  tools: [CreateWidget],
+)
+result.response # => "Created widget Sprocket (id: 42)."
+```
+
+`tools:` accepts a mix of **bare Axn classes** (wrapped automatically) and **already-wrapped tools** from `Axn::RubyLLM.wrap` (a class, or an instance that closed over `ambient_context:` — see below). Pass `tools: Axn::RubyLLM.tools` to expose everything registered under the `:ruby_llm` adapter (see [Enumerating tools](#enumerating-tools-from-the-registry)). The same Axn classes you expose through [axn-mcp](https://github.com/teamshares/axn-mcp) work here unchanged.
+
+> **Token/cost in a tool loop:** a tool call makes multiple model round-trips inside one `ask`. RubyLLM reports usage per message, so `result.input_tokens` / `output_tokens` / `cost` reflect the **final** model response, not the sum across the loop.
+
+`Axn::RubyLLM.wrap` is also available directly if you're driving `RubyLLM.chat` yourself rather than going through `ask` — see [Using wrapped tools with RubyLLM directly](#using-wrapped-tools-with-rubyllm-directly).
 
 The tool's name, description, and JSON Schema parameters come straight from the Axn's own contract — the same `description`/`expects`/`exposes` you'd write for any Axn — so a minimal class just works (the tool name defaults from the class name: `CreateWidget` → `create_widget`). A tool call missing a required argument, carrying one outside the advertised schema (including a smuggled-in `ambient_context:`, which is never advertised), or supplying one of the wrong JSON type (e.g. a number where the schema declares a string), returns RubyLLM's own `{ error: "Invalid tool arguments: ..." }` without invoking the Axn at all — it never reaches Axn's own (dev-facing-by-default) input validation, and it can never override the caller's ambient context. The type check is deliberately shallow (top-level type only) and never blocks a property whose allowed type can't be determined from the schema (untyped/enum-only fields), so it can't reject anything Axn's own contract would accept.
 
 On success, `execute` returns the exposed values (`Axn::Reflection::Values.serialize_exposed`) as a JSON **string**, not a Hash — `RubyLLM::Chat#handle_tool_calls` only passes a `Content`/`Content::Raw` return through as-is, and otherwise sends `tool_payload.to_s`, which for a Hash produces Ruby's inspect syntax rather than JSON; on failure, `{ error: result.error }`. The same `CreateWidget` class can be wrapped for other transports (e.g. `Axn::MCP.wrap`) with no changes — the contract is declared once.
 
-Options, settable either per-call via `wrap` keywords or once on the Axn via axn's namespaced per-class `configure(:ruby_llm) { |c| ... }` (added in [axn#154](https://github.com/teamshares/axn/pull/154); a `wrap` keyword wins when both are present, then the class-level `configure(:ruby_llm)` value, then this gem's own `Axn::RubyLLM.configure { |c| ... }` global, then the default below):
+Options, settable either per-call via `wrap` keywords or once on the Axn via axn's namespaced per-class `configure(:ruby_llm) { |c| ... }` (a `wrap` keyword wins when both are present, then the class-level `configure(:ruby_llm)` value, then this gem's own `Axn::RubyLLM.configure { |c| ... }` global, then the default below):
 
 | Option | Effect |
 |---|---|
@@ -181,6 +196,18 @@ Axn::RubyLLM.wrap(CreateWidget, ambient_context: { company_id: current_company.i
 
 Passing `ambient_context:` returns a tool **instance** (closing over that context) rather than the tool class, since `chat.with_tool` accepts either.
 
+### Using wrapped tools with RubyLLM directly
+
+`Axn::RubyLLM.ask(tools:)` covers the common single-call case. When you're driving `RubyLLM.chat` yourself — multi-turn conversations, streaming, or anything else beyond `ask` — register wrapped tools with RubyLLM's own `with_tool` / `with_tools`, which accept a `RubyLLM::Tool` class or instance:
+
+```ruby
+chat = RubyLLM.chat.with_tool(Axn::RubyLLM.wrap(CreateWidget))
+chat.ask("Create a widget called Sprocket")
+
+# or register everything under the :ruby_llm adapter at once:
+chat = RubyLLM.chat.with_tools(*Axn::RubyLLM.tools)
+```
+
 ### Tool naming
 
 The name is axn core's canonical, provider-safe `tool_name`: lowercased to `[a-z0-9_]`, leading configured prefixes stripped, snake_cased with single underscores, and never blank (`Admin::CreateWidget` → `admin_create_widget`; a truly anonymous Axn → `"tool"`). Declare `axn_name "..."` on the Axn to override the default. Because it's the same core derivation every adapter uses, a class wrapped by both `Axn::RubyLLM.wrap` and `Axn::MCP.wrap` advertises an identical name — the contract is declared once.
@@ -203,7 +230,7 @@ chat = RubyLLM.chat.with_tools(*Axn::RubyLLM.tools)
 
 ### Date/Time/Symbol/Integer/Float fields — declare `coerce:`
 
-A provider always sends tool-call arguments as JSON, so a `Date`/`Time`/`DateTime`/`Symbol`/`Integer`/`Float`-typed field arrives as a **String** (e.g. `"2026-07-08"`), which the plain `type:` validator rejects — it checks `value.is_a?(klass)`, not a parse. Declare `coerce:` on that `expects` field so axn parses the wire string before validation runs (added in [axn#148](https://github.com/teamshares/axn/pull/148)):
+A provider always sends tool-call arguments as JSON, so a `Date`/`Time`/`DateTime`/`Symbol`/`Integer`/`Float`-typed field arrives as a **String** (e.g. `"2026-07-08"`), which the plain `type:` validator rejects — it checks `value.is_a?(klass)`, not a parse. Declare `coerce:` on that `expects` field so axn parses the wire string before validation runs:
 
 ```ruby
 expects :scheduled_for, coerce: Date          # sugar for type: { klass: Date, coerce: true }
