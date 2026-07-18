@@ -23,6 +23,13 @@ contract, failure surfaces (`fail!`/`fails_on`/unhandled exception, `standalone:
   `writing-plans` defer to. Excluded from the packaged gem (`spec.files`).
 - `docs/` is reserved for a future user-facing site; don't put internal drafts there.
 
+## Git hooks
+
+`bin/setup` installs a lefthook pre-commit hook (`lefthook.yml`) that runs RuboCop on staged Ruby
+files and **blocks** the commit on any offense (lint-only — no autocorrect, since lefthook can't
+isolate partially-staged content; fix + re-stage to proceed). `git commit --no-verify` skips it; CI
+runs the full `rake` regardless.
+
 ## Changes & compatibility
 
 - Tracks [axn](https://github.com/teamshares/axn) closely (`Gemfile`/`Gemfile.lock`). On an axn
