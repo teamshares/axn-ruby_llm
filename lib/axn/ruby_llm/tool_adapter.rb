@@ -58,12 +58,10 @@ module Axn
         def build_tool_class(axn_class, halt_after:, provider_params:, present_as:, ambient_context:)
           # Core's canonical, provider-safe tool_name (PRO-2921): strips configured leading prefixes,
           # snake_cases with single underscores, restricts to [a-z0-9_], and is never blank (anonymous
-          # -> "tool"). Replaces the old crude sanitize_tool_name gsub, whose namespaced output mangled
-          # word boundaries (agenttools__listcompanies). The same Axn class now wraps to the same name
-          # across every adapter -- Axn::MCP.wrap included -- which is the whole author-once point.
+          # -> "tool"). The same Axn class wraps to the same name across every adapter (Axn::MCP.wrap
+          # included) -- the author-once point.
           tool_name = axn_class.tool_name
           input_schema = normalize_nullable_types(axn_class.input_schema)
-          validate_args = tool_argument_validator(input_schema)
 
           Class.new(::RubyLLM::Tool) do
             description(axn_class.description) if axn_class.description
@@ -73,13 +71,24 @@ module Axn
             define_method(:name) { tool_name }
 
             define_method(:execute) do |**args|
-              error = validate_args.call(args)
-              next({ error: }) if error
+              # Run the Axn through axn core's tool Invoker (PRO-2943): input types are coerced from the
+              # wire, undeclared args are rejected, and a model-supplied `ambient_context` is stripped
+              # (the injection guard) while the wrap's own trusted context is injected in its place.
+              # Contract violations settle user-facing, so `input_invalid?` lets us hand the model a
+              # clean, correctable "Invalid tool arguments" error instead of leaking a dev-facing bug
+              # (which also keeps a bad tool call from paging on_exception).
+              invoker = ::Axn::Tools::Invoker.new(user_facing_input_errors: true, reject_undeclared_inputs: true)
+              result = if ambient_context.equal?(NOT_SET)
+                         invoker.call(axn_class, args)
+                       else
+                         invoker.call(axn_class, args, ambient_context:)
+                       end
 
-              call_args = ambient_context.equal?(NOT_SET) ? args : args.merge(ambient_context:)
-              result = axn_class.call(**call_args)
+              unless result.ok?
+                next({ error: "Invalid tool arguments: #{result.error}" }) if ::Axn::Tools::Invoker.input_invalid?(result)
 
-              next({ error: result.error }) unless result.ok?
+                next({ error: result.error })
+              end
 
               # RubyLLM::Chat#handle_tool_calls only treats a Content/Content::Raw return as-is; any
               # other object (including a plain Hash) gets `#to_s`'d before being sent to the provider
@@ -93,67 +102,6 @@ module Axn
               halt_after ? halt(payload) : payload
             end
           end
-        end
-
-        # `allowed_args` deliberately excludes `ambient_context` (core's reflected input_schema never
-        # advertises it) — so a smuggled-in `ambient_context:` tool arg (e.g. prompt injection
-        # attempting to run this call under a different tenant's context) is rejected by the returned
-        # validator rather than reaching `axn_class.call`, where it would silently replace the
-        # caller's own ambient context.
-        #
-        # The value-type check below is deliberately shallow (top-level JSON type only, no nested
-        # properties/items/enum/format) — it exists only to catch an obviously wrong-shaped argument
-        # (e.g. `name: 123` for a String field) before it reaches Axn's own `expects` validation, which
-        # treats an un-`user_facing:` violation as a dev-facing exception (reported, generic message)
-        # rather than RubyLLM's clean, recoverable "Invalid tool arguments" response. A property whose
-        # allowed JSON type(s) can't be determined (no `type:`/`anyOf`, e.g. an enum-only or untyped
-        # field) is never blocked, so this can't reject a value Axn's own contract would accept.
-        def tool_argument_validator(input_schema)
-          required_args = Array(input_schema[:required]).map(&:to_sym)
-          properties = input_schema.fetch(:properties, {})
-          allowed_args = properties.keys.map(&:to_sym)
-
-          lambda do |args|
-            missing = required_args - args.keys
-            next "Invalid tool arguments: missing keyword: #{missing.first}" if missing.any?
-
-            unknown = args.keys - allowed_args
-            next "Invalid tool arguments: unknown keyword: #{unknown.first}" if unknown.any?
-
-            mismatch = args.find { |key, value| !schema_value_matches?(properties[key], value) }
-            next "Invalid tool arguments: #{mismatch.first} must be a #{json_types_for(properties[mismatch.first]).join(" or ")}" if mismatch
-
-            nil
-          end
-        end
-
-        JSON_TYPE_PREDICATES = {
-          "string" => ->(v) { v.is_a?(String) },
-          "integer" => ->(v) { v.is_a?(Integer) },
-          "number" => ->(v) { v.is_a?(Numeric) },
-          "boolean" => ->(v) { [true, false].include?(v) },
-          "object" => ->(v) { v.is_a?(Hash) },
-          "array" => ->(v) { v.is_a?(Array) },
-          "null" => lambda(&:nil?),
-        }.freeze
-        private_constant :JSON_TYPE_PREDICATES
-
-        # The property's allowed JSON type(s), or nil when none can be determined (untyped, enum-only,
-        # or an anyOf with no member `type:`) — nil means "don't check", never "reject everything".
-        def json_types_for(prop)
-          return nil unless prop
-
-          return Array(prop[:type]) if prop[:type]
-          return prop[:anyOf].flat_map { |member| Array(member[:type]) }.uniq if prop[:anyOf]
-
-          nil
-        end
-
-        def schema_value_matches?(prop, value)
-          types = json_types_for(prop)
-          return true if types.nil? || types.empty?
-
-          types.any? { |type| JSON_TYPE_PREDICATES[type]&.call(value) }
         end
 
         # axn reflects a nullable/optional field as a JSON Schema array-valued `type`
@@ -191,9 +139,9 @@ module Axn
         ToolAdapter.wrap(...)
       end
 
-      # Every Axn registered as a :ruby_llm tool -- via `tool`/`tool :ruby_llm`, residency under a
-      # configured tool_path, or a `configure(:ruby_llm)` bag (see Axn::Tools::Registry#member?) --
-      # each already wrapped as a ::RubyLLM::Tool, so a consumer builds its whole chat tool list in
+      # Every Axn registered as a :ruby_llm tool -- via `tool`/`tool :ruby_llm`, residency under one of
+      # the configured `tool_roots`, or a `configure(:ruby_llm)` bag (see Axn::Tools::Registry#member?)
+      # -- each already wrapped as a ::RubyLLM::Tool, so a consumer builds its whole chat tool list in
       # one call: `chat.with_tools(*Axn::RubyLLM.tools)`. Mirrors the shared GemName.tools contract
       # with Axn::MCP.tools; the same Axn class resolves to the same tool_name across both surfaces.
       def tools

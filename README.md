@@ -157,7 +157,7 @@ result.response # => "Created widget Sprocket (id: 42)."
 
 `Axn::RubyLLM.wrap` is also available directly if you're driving `RubyLLM.chat` yourself rather than going through `ask` — see [Using wrapped tools with RubyLLM directly](#using-wrapped-tools-with-rubyllm-directly).
 
-The tool's name, description, and JSON Schema parameters come straight from the Axn's own contract — the same `description`/`expects`/`exposes` you'd write for any Axn — so a minimal class just works (the tool name defaults from the class name: `CreateWidget` → `create_widget`). A tool call missing a required argument, carrying one outside the advertised schema (including a smuggled-in `ambient_context:`, which is never advertised), or supplying one of the wrong JSON type (e.g. a number where the schema declares a string), returns RubyLLM's own `{ error: "Invalid tool arguments: ..." }` without invoking the Axn at all — it never reaches Axn's own (dev-facing-by-default) input validation, and it can never override the caller's ambient context. The type check is deliberately shallow (top-level type only) and never blocks a property whose allowed type can't be determined from the schema (untyped/enum-only fields), so it can't reject anything Axn's own contract would accept.
+The tool's name, description, and JSON Schema parameters come straight from the Axn's own contract — the same `description`/`expects`/`exposes` you'd write for any Axn — so a minimal class just works (the tool name defaults from the class name: `CreateWidget` → `create_widget`). Arguments the model supplies are run through axn core's tool `Invoker`: wire types are coerced, and any contract violation — a missing required field, an out-of-schema argument, a wrong type, or a value outside an `inclusion` set (validated at **full depth**, not just the top-level type) — comes back to the model as a clean, correctable `{ error: "Invalid tool arguments: <reason>" }`, and does **not** page `on_exception` as though it were a bug. A model-supplied `ambient_context` is stripped before the Axn runs, so a prompt-injected context can never override the caller's — the wrap's own `ambient_context:` (below) is injected instead.
 
 On success, `execute` returns the exposed values (`Axn::Reflection::Values.serialize_exposed`) as a JSON **string**, not a Hash — `RubyLLM::Chat#handle_tool_calls` only passes a `Content`/`Content::Raw` return through as-is, and otherwise sends `tool_payload.to_s`, which for a Hash produces Ruby's inspect syntax rather than JSON; on failure, `{ error: result.error }`. The same `CreateWidget` class can be wrapped for other transports (e.g. `Axn::MCP.wrap`) with no changes — the contract is declared once.
 
@@ -220,19 +220,33 @@ The name is axn core's canonical, provider-safe `tool_name`: lowercased to `[a-z
 
 ### Enumerating tools from the registry
 
-Rather than wiring each tool up by hand, let an Axn opt into the `:ruby_llm` adapter and build the whole chat tool list from axn core's tool registry:
+Rather than wiring each tool up by hand, let axn's tool registry find them and build the whole chat tool list in one call:
+
+```ruby
+chat = RubyLLM.chat.with_tools(*Axn::RubyLLM.tools)
+```
+
+`Axn::RubyLLM.tools` returns every Axn registered under the `:ruby_llm` adapter, already wrapped as a `::RubyLLM::Tool` — sugar for `Axn.tools_for(:ruby_llm).map { |axn| Axn::RubyLLM.wrap(axn) }`, in a stable, `tool_name`-sorted order.
+
+**Membership = (directory grant ∪ declaration grant) − exclusions.** An Axn is a `:ruby_llm` tool if either:
+
+- **Directory grant** — its file lives under one of the adapter's `tool_roots`. The default is `["agent_tools"]` (→ `app/agent_tools` in a Rails app), so **an Axn dropped in `app/agent_tools` is a tool with no declaration at all**. Configure the roots with `Axn::RubyLLM.configure { |c| c.tool_roots = ["agent_tools", "actions/tools"] }`; each entry must be a narrow subdir (`app/`, `actions`, `.`, and `..` are rejected, so you can't bulk-expose every action).
+- **Declaration grant** — it declares `tool` (every adapter), `tool :ruby_llm`, or carries a `configure(:ruby_llm)` bag.
+
+…unless it opts out: `tool false` (no adapter) or `tool except: :ruby_llm` (keep the directory grant, drop this adapter).
 
 ```ruby
 class CreateWidget
   include Axn
-  tool :ruby_llm          # or a bare `tool` to join every registered adapter
+  tool :ruby_llm                              # add :ruby_llm (on top of any directory grant)
+  tool ruby_llm: { present_as: :message }     # …or add it AND set per-adapter options inline
   # ...
 end
-
-chat = RubyLLM.chat.with_tools(*Axn::RubyLLM.tools)
 ```
 
-`Axn::RubyLLM.tools` returns every opted-in Axn already wrapped as a `::RubyLLM::Tool` — sugar for `Axn.tools_for(:ruby_llm).map { |axn| Axn::RubyLLM.wrap(axn) }`. An Axn is a member if it declares `tool` / `tool :ruby_llm`, lives under a configured `tool_path` (`Axn.config.tool_paths`), or carries a `configure(:ruby_llm)` bag. Because both adapters read the registry and the same canonical `tool_name`, the identical set of Axns exposed via `Axn::MCP.tools` advertises identical names.
+Because both adapters read the registry and the same canonical `tool_name`, the identical set of Axns exposed via `Axn::MCP.tools` advertises identical names — and since both default `tool_roots` to `agent_tools`, an Axn there is authored once and is a tool on both surfaces.
+
+> **Upgrading from the pre-registry API:** `tool :ruby_llm` now **adds** to the directory grant rather than replacing it (declare all adapters, `name:`, `except:`, and per-adapter options in a single `tool` call). And the old global `Axn.config.tool_paths` is **gone** — each adapter owns its own `tool_roots`, so point `Axn::RubyLLM.config.tool_roots` (and `Axn::MCP`'s) at your tool dirs instead.
 
 ### Date/Time/Symbol/Integer/Float fields — declare `coerce:`
 
@@ -251,7 +265,7 @@ The advertised tool schema is axn's reflected `input_schema`. A few things worth
 
 - **Nullable/optional fields** — handled. axn reflects a nullable field as an array-valued `type` (`["integer", "null"]`); the adapter rewrites that to the equivalent `anyOf` form, because Gemini's converter can't read array-valued types and would otherwise collapse the field to `STRING`. No action needed on your part.
 - **Array fields — declare `of:`.** `expects :ids, type: Array` reflects to `{type: array}` with no `items`, so the element type isn't advertised (Gemini then assumes `string`; OpenAI *strict* mode requires `items`). Declare the element type — `expects :ids, type: Array, of: Integer` — to advertise `items` correctly.
-- **Enums are advertised — use the top-level `inclusion:` key.** `expects :color, type: String, inclusion: { in: %w[red green blue] }` reflects to `{ type: "string", enum: ["red", "green", "blue"] }`, so the model is told the allowed set (an `optional:` field keeps `null` in the enum; a dynamic `in: -> { ... }` is correctly skipped rather than guessed). Note this is the **top-level `inclusion:` option**, not `validate: { inclusion: ... }` — `validate:` is axn's custom-callable hook (it needs `with:`), so that spelling neither enforces nor reflects the set.
+- **Enums are advertised — use the top-level `inclusion:` key.** `expects :color, type: String, inclusion: %w[red green blue]` (a bare Array, or the long form `inclusion: { in: %w[red green blue] }`) reflects to `{ type: "string", enum: ["red", "green", "blue"] }`, so the model is told the allowed set (an `optional:` field keeps `null` in the enum; a dynamic `in: -> { ... }` is correctly skipped rather than guessed). Note this is the **top-level `inclusion:` option**, not `validate: { inclusion: ... }` — `validate:` is axn's custom-callable hook (it needs `with:`), so that spelling neither enforces nor reflects the set.
 - **Conditional expectations** (`expects :token, if: :use_token`) reflect to a JSON Schema `allOf`/`if`/`then` clause. Gemini's converter ignores it — the field degrades to plain-optional (safe: a valid call is never wrongly rejected, but the conditional isn't conveyed to the model). This gem doesn't set OpenAI's `strict` mode, so OpenAI tolerates `allOf` by default; if you opt into strict via `provider_params`, OpenAI will reject `allOf`. Either way, encoding the rule in `description:` is the portable option.
 
 ## Testing

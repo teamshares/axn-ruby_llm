@@ -9,9 +9,9 @@
 
 ### Added
 
-- **Tool adapter — wrap any Axn as a `RubyLLM::Tool`.** `Axn::RubyLLM.wrap(any_axn)` turns any Axn into a `::RubyLLM::Tool` a chat can call, with no adapter-specific mixin: its name, description, and JSON Schema parameters come from the Axn's own `description`/`expects`/`exposes` contract. On success the tool returns the exposed values as JSON (or `result.message`, per `present_as:`); on failure, `{ error: <result.error> }`. Malformed tool calls — missing, unknown, or wrong-typed arguments, including an injected `ambient_context:` — are rejected with a clean `Invalid tool arguments` error before the Axn runs. Per-tool options `halt_after:`, `provider_params:`, `present_as:` (`:structured` / `:message`), and `ambient_context:` are settable per-call, per-class via `configure(:ruby_llm) { |c| ... }`, or gem-wide via `Axn::RubyLLM.configure`. The same Axn advertises an identical tool name whether wrapped here or by `Axn::MCP.wrap`. See the README's "Tool adapter" section.
+- **Tool adapter — wrap any Axn as a `RubyLLM::Tool`.** `Axn::RubyLLM.wrap(any_axn)` turns any Axn into a `::RubyLLM::Tool` a chat can call, with no adapter-specific mixin: its name, description, and JSON Schema parameters come from the Axn's own `description`/`expects`/`exposes` contract. On success the tool returns the exposed values as JSON (or `result.message`, per `present_as:`); on failure, `{ error: <result.error> }`. Malformed tool calls — a missing/unknown/wrong-typed argument, a value outside an `inclusion` set (validated at full depth via axn's tool `Invoker`), or an injected `ambient_context:` — come back to the model as a clean `Invalid tool arguments` error and never page `on_exception`. Per-tool options `halt_after:`, `provider_params:`, `present_as:` (`:structured` / `:message`), and `ambient_context:` are settable per-call, per-class via `configure(:ruby_llm) { |c| ... }` (or inline via `tool ruby_llm: { ... }`), or gem-wide via `Axn::RubyLLM.configure`. The same Axn advertises an identical tool name whether wrapped here or by `Axn::MCP.wrap`. See the README's "Tool adapter" section.
 - **Tools in `ask`.** `Axn::RubyLLM.ask(prompt:, tools: [...])` registers wrapped Axns on the chat and runs RubyLLM's tool-call loop within the single call. `tools:` takes bare Axn classes (wrapped automatically) and already-wrapped tools alike, or pass `Axn::RubyLLM.tools` for everything registered.
-- **Tool registry integration.** `Axn::RubyLLM.tools` returns every Axn opted into the `:ruby_llm` adapter — via `tool` / `tool :ruby_llm`, a configured `tool_path`, or a `configure(:ruby_llm)` bag — each wrapped and ready to register in stable, sorted order: `chat.with_tools(*Axn::RubyLLM.tools)`.
+- **Tool registry integration.** `Axn::RubyLLM.tools` returns every Axn registered under the `:ruby_llm` adapter — one whose file lives under the adapter's `tool_roots` (default `["agent_tools"]`), or that declares `tool` / `tool :ruby_llm`, or that carries a `configure(:ruby_llm)` bag, minus any `tool false` / `tool except: :ruby_llm` opt-outs — each wrapped and ready to register in stable, `tool_name`-sorted order: `chat.with_tools(*Axn::RubyLLM.tools)`. Configure the directories via `Axn::RubyLLM.configure { |c| c.tool_roots = [...] }`.
 - **`error_headline` config** (default `"LLM request failed"`) overrides the prefix on every `Ask` failure without subclassing.
 
 ### Changed
@@ -20,7 +20,7 @@
 
 ### Requires
 
-- An `axn` version providing core contract reflection, the tool registry + canonical `tool_name`, and namespaced per-class `configure(...)`. Currently tracked against `axn` `main`; see the release checklist on the PR before publishing.
+- An `axn` version providing core contract reflection, the tool registry (per-adapter `tool_roots` + union membership) with canonical `tool_name`, the tool `Invoker` (input-validation surfacing), and namespaced per-class `configure(...)`. Currently tracked against `axn` `main`; see the release checklist on the PR before publishing.
 
 ## [0.1.3] - 2026-06-26
 

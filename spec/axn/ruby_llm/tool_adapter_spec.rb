@@ -152,19 +152,31 @@ RSpec.describe Axn::RubyLLM do
         expect(failing_tool.execute(name: "nobody")).to eq(error: "Couldn't greet: no name allowed")
       end
 
-      it "returns RubyLLM's invalid-arguments error for a missing required field, without invoking the Axn" do
-        expect(greeter).not_to receive(:call)
-        expect(tool.execute).to eq(error: "Invalid tool arguments: missing keyword: name")
+      # The Invoker (PRO-2943) runs the Axn under user-facing input validation, so a bad tool call
+      # surfaces as a clean, correctable "Invalid tool arguments: <axn message>" (and never pages
+      # on_exception), rather than the adapter pre-checking a shallow subset of the schema itself.
+      it "returns an invalid-arguments error for a missing required field" do
+        expect(tool.execute).to eq(error: "Invalid tool arguments: Name is not a String and Name can't be blank")
       end
 
-      it "returns RubyLLM's invalid-arguments error for an argument outside the schema, without invoking the Axn" do
-        expect(greeter).not_to receive(:call)
-        expect(tool.execute(name: "Ada", extra: "haha")).to eq(error: "Invalid tool arguments: unknown keyword: extra")
+      it "returns an invalid-arguments error for an argument outside the schema" do
+        expect(tool.execute(name: "Ada", extra: "haha")).to eq(error: "Invalid tool arguments: unknown input: extra")
       end
 
-      it "returns RubyLLM's invalid-arguments error for a wrong-type argument, without invoking the Axn" do
-        expect(greeter).not_to receive(:call)
-        expect(tool.execute(name: 123)).to eq(error: "Invalid tool arguments: name must be a string")
+      it "returns an invalid-arguments error for a wrong-type argument (full-depth, not just top-level)" do
+        expect(tool.execute(name: 123)).to eq(error: "Invalid tool arguments: Name is not a String")
+      end
+
+      it "returns an invalid-arguments error for a value outside an inclusion set" do
+        enum_axn = Class.new do
+          include Axn
+
+          expects :color, type: String, inclusion: %w[red green blue]
+          exposes :chosen
+          def call = expose(chosen: color)
+        end
+        tool = described_class.wrap(enum_axn).new
+        expect(tool.execute(color: "purple")).to eq(error: "Invalid tool arguments: Color is not included in the list")
       end
 
       it "allows a nil value for an optional (nullable) field" do
@@ -199,12 +211,12 @@ RSpec.describe Axn::RubyLLM do
         end
       end
 
-      it "rejects an ambient_context key smuggled in through tool args, without invoking the Axn" do
-        tool = described_class.wrap(ambient_axn).new
-        expect(ambient_axn).not_to receive(:call)
-        expect(tool.execute(ambient_context: { company_id: "attacker" })).to eq(
-          error: "Invalid tool arguments: unknown keyword: ambient_context",
-        )
+      it "strips a model-supplied ambient_context; the wrap's trusted context wins" do
+        # The Invoker treats ambient_context as reserved: a value smuggled in through tool args is
+        # dropped before the Axn runs, and the wrap's own trusted context is injected instead — so the
+        # attacker value never reaches the Axn.
+        tool = described_class.wrap(ambient_axn, ambient_context: { company_id: 42 })
+        expect(tool.execute(ambient_context: { company_id: "attacker" })).to eq({ "company_id" => 42 }.to_json)
       end
     end
 
@@ -329,9 +341,23 @@ RSpec.describe Axn::RubyLLM do
     end
   end
 
-  describe "tool registry integration (PRO-2924)" do
+  describe "tool registry integration" do
     it "registers :ruby_llm as a tool adapter at load" do
       expect(Axn::Tools::Registry.adapters).to include(:ruby_llm)
+    end
+
+    it "registers Axn::RubyLLM itself as the adapter's config source (PRO-2948)" do
+      expect(Axn::Tools::Registry.adapter_config_source(:ruby_llm)).to eq(Axn::RubyLLM)
+    end
+
+    it "ships the shared agent-tools dir as the default tool_roots (PRO-2948)" do
+      expect(Axn::RubyLLM.config.tool_roots).to eq(["agent_tools"])
+    end
+
+    it "rejects a broad tool_roots entry that would bulk-expose every action" do
+      expect { Axn::RubyLLM.configure { |c| c.tool_roots = ["app"] } }.to raise_error(ArgumentError, /too broad/)
+    ensure
+      Axn::RubyLLM.reset_config!
     end
 
     it "enumerates Axns that opt in via `tool :ruby_llm`" do

@@ -3,11 +3,6 @@
 require "ruby_llm"
 require "axn"
 
-# Register the :ruby_llm tool adapter with axn core's process-global registry (PRO-2921) so
-# `Axn.tools_for(:ruby_llm)` is legal and any Axn can opt in via `tool :ruby_llm` or a
-# `configure(:ruby_llm)` bag. Idempotent (the registry backs on a Set).
-Axn.register_tool_adapter(:ruby_llm)
-
 require_relative "ruby_llm/version"
 require_relative "ruby_llm/ask"
 
@@ -15,10 +10,22 @@ module Axn
   module RubyLLM
     include Axn::Mountable
     extend Axn::Configurable
+    extend Axn::Tools::AdapterRoots
 
     setting :default_model, default: "gpt-4o-mini"
     setting :enabled, default: true, callable: true
     setting :error_headline, default: "LLM request failed"
+
+    # `Axn::Tools::AdapterRoots` (extended above) declares `tool_roots` with `default: []`; re-declare
+    # it (core's `setting` is last-wins) to ship the shared agent-tools dir as the default, so any Axn
+    # living under `app/agent_tools` is exposed as a `:ruby_llm` tool out of the box. It's the same dir
+    # axn-mcp defaults to, so one Axn there is authored once and surfaces on both. The re-declaration
+    # keeps AdapterRoots' broad-path validation (no widening a root to `app/`/`actions`/`.`/`..`).
+    setting :tool_roots, default: ["agent_tools"], validate: ->(value) { Axn::Tools::AdapterRoots.validate!(value) }
+
+    # Register this module as the `:ruby_llm` adapter AND its config source (PRO-2948): the registry
+    # reads `Axn::RubyLLM.config.tool_roots` off the source to grant directory-based membership.
+    Axn.register_tool_adapter(:ruby_llm, self)
 
     mount_axn :ask, Ask
 
