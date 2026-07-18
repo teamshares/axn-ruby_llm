@@ -1,80 +1,22 @@
-AllCops:
-  TargetRubyVersion: 3.2
-  NewCops: enable
-  SuggestExtensions: false
+inherit_gem:
+  axn: .rubocop.yml
 
+# Local deltas only — everything else (the AllCops preamble and the shared Style/Metrics rules) is
+# inherited from axn's shared config above.
+
+# The hyphenated entry file (lib/axn-ruby_llm.rb) intentionally defines Axn::RubyLLM; axn's shared
+# config doesn't touch Naming/FileName, so this is a genuine local exclude.
 Naming/FileName:
   Exclude:
     - "lib/axn-ruby_llm.rb"
 
-Style/MultilineBlockChain:
-  Enabled: false
-
-Style/SingleLineMethods:
-  Enabled: false
-
-Style/StringLiterals:
-  Enabled: true
-  EnforcedStyle: double_quotes
-
-Style/StringLiteralsInInterpolation:
-  Enabled: true
-  EnforcedStyle: double_quotes
-
-Style/Documentation:
-  Enabled: false
-
-Style/TrailingCommaInArguments:
-  EnforcedStyleForMultiline: comma
-
-Style/TrailingCommaInArrayLiteral:
-  EnforcedStyleForMultiline: comma
-
-Style/TrailingCommaInHashLiteral:
-  EnforcedStyleForMultiline: comma
-
-Style/HashSyntax:
-  EnforcedShorthandSyntax: always
-
-Naming/MemoizedInstanceVariableName:
-  Enabled: false
-
-Style/ClassAndModuleChildren:
-  Enabled: false
-
-Style/DoubleNegation:
-  Enabled: false
-
+# axn's shared set is `e, on, id, if, as`; `t` is used locally. Array values REPLACE (not merge)
+# under inheritance, so this must be the full intended set, not just the addition.
 Naming/MethodParameterName:
   AllowedNames: e, on, id, if, as, t
 
-Metrics/BlockLength:
-  Max: 50
-  Exclude:
-    - "spec/**/*"
-    - "*.gemspec"
-
-Metrics/ClassLength:
-  Max: 150
-
-Metrics/MethodLength:
-  Max: 30
-
-Layout/LineLength:
-  Max: 160
-
-Naming/VariableNumber:
-  Exclude:
-    - "spec/**/*"
-
-Metrics/AbcSize:
-  Max: 32
-
-Metrics/PerceivedComplexity:
-  Max: 20
-
-Metrics/CyclomaticComplexity:
-  Max: 20
-
-Metrics/ParameterLists:
-  Max: 10
+# axn's shared config sets Style/StringLiterals (double_quotes) but NOT the interpolation variant,
+# whose rubocop default is single_quotes — so keep this locally to hold double-quote consistency
+# inside interpolations too.
+Style/StringLiteralsInInterpolation:
+  EnforcedStyle: double_quotes
