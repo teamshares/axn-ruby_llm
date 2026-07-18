@@ -16,6 +16,13 @@ contract, failure surfaces (`fail!`/`fails_on`/unhandled exception, `standalone:
 - Before a release: check for entries whose "Remove in" version has arrived; remove them per their
   checklist.
 
+## Docs
+
+- `internal-docs/` holds internal notes and the specs/plans the `superpowers` skills generate
+  (`internal-docs/specs/`, `internal-docs/plans/`) — the location preference `brainstorming` /
+  `writing-plans` defer to. Excluded from the packaged gem (`spec.files`).
+- `docs/` is reserved for a future user-facing site; don't put internal drafts there.
+
 ## Changes & compatibility
 
 - Tracks [axn](https://github.com/teamshares/axn) closely (`Gemfile`/`Gemfile.lock`). On an axn
