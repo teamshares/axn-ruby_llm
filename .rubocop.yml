@@ -1,23 +1,9 @@
 inherit_gem:
   axn: .rubocop.yml
 
-# Exclude arrays MERGE (union) across the inheritance chain rather than replace. Without this,
-# inheriting axn's `AllCops/Exclude` would clobber rubocop's built-in excludes (`vendor/**/*`,
-# `node_modules/**/*`, …); and axn's own copies of those globs resolve relative to the axn gem dir
-# (the inherit_gem relative-path gotcha), so they don't cover THIS project's dirs.
-inherit_mode:
-  merge:
-    - Exclude
-
-# Local deltas only — everything else (the AllCops preamble and the shared Style/Metrics rules) is
-# inherited from axn's shared config above.
-
-# Re-declare, relative to this project, the excludes CI depends on: `bundler-cache` installs gems
-# into ./vendor/bundle, so without this rubocop lints the installed gems (bin stubs, axn's examples).
-AllCops:
-  Exclude:
-    - "vendor/**/*"
-    - "node_modules/**/*"
+# Local deltas only — everything else (the AllCops preamble, the shared Style/Metrics rules, and the
+# built-in vendor/node_modules/tmp/.git excludes merged in via axn's own `inherit_mode`) is inherited
+# from axn's shared config above.
 
 # The hyphenated entry file (lib/axn-ruby_llm.rb) intentionally defines Axn::RubyLLM; axn's shared
 # config doesn't touch Naming/FileName, so this is a genuine local exclude.
