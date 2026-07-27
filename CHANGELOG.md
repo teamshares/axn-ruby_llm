@@ -17,10 +17,11 @@
 ### Changed
 
 - **`Ask` failures now carry a consistent `"LLM request failed: <reason>"` message, with more specific reasons.** Rate limits, transient provider errors (5xx → "Provider temporarily unavailable, try again later"), context-length-exceeded, and invalid-JSON responses each get their own wording; the provider's own message is preserved where useful. Unrecognized exceptions (likely bugs, not known RubyLLM/network failures) now fail with the bare headline and no leaked exception detail — error reporting via `Axn.config.on_exception` is unaffected. See the README's "Errors" section.
+- **OpenTelemetry attribute recording is guarded by axn's `Extensions.best_effort` helper** — a telemetry failure now warn-logs (and fails loud in development) instead of vanishing silently, while still never breaking the LLM call.
 
 ### Requires
 
-- An `axn` version providing core contract reflection, the tool registry (per-adapter `tool_roots` + union membership) with canonical `tool_name`, the tool `Invoker` (input-validation surfacing), and namespaced per-class `configure(...)`. Currently tracked against `axn` `main`; see the release checklist on the PR before publishing.
+- An `axn` version providing core contract reflection, the tool registry (per-adapter `tool_roots` + union membership) with canonical `tool_name`, the tool `Invoker` (input-validation surfacing), the extension-author surface (`Axn::Extensions.best_effort`), and namespaced per-class `configure(...)`. Currently tracked against `axn` `main`; see the release checklist on the PR before publishing.
 
 ## [0.1.3] - 2026-06-26
 

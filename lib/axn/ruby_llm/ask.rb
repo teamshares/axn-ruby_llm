@@ -178,19 +178,22 @@ module Axn
       end
 
       def record_otel_attributes!(input_tokens:, output_tokens:, cost:, response_model:, stubbed:)
-        return unless defined?(::OpenTelemetry::Trace)
+        # Telemetry is a best-effort side effect: it must never break the LLM call. Route it through
+        # axn core's guard (PRO-2950) rather than a bare rescue — it swallows + warn-logs on failure
+        # (and fails loud in dev when best_effort_raises_in_dev is set) instead of silently vanishing.
+        Axn::Extensions.best_effort("recording OpenTelemetry attributes on the axn.call span") do
+          next unless defined?(::OpenTelemetry::Trace)
 
-        span = ::OpenTelemetry::Trace.current_span
-        return unless span&.context&.valid?
+          span = ::OpenTelemetry::Trace.current_span
+          next unless span&.context&.valid?
 
-        span.set_attribute("gen_ai.request.model", resolved_model) if resolved_model
-        span.set_attribute("gen_ai.response.model", response_model) if response_model
-        span.set_attribute("gen_ai.usage.input_tokens", input_tokens) if input_tokens
-        span.set_attribute("gen_ai.usage.output_tokens", output_tokens) if output_tokens
-        span.set_attribute("gen_ai.usage.cost", cost) if cost
-        span.set_attribute("axn.ruby_llm.stubbed", stubbed) unless stubbed.nil?
-      rescue StandardError
-        # never let telemetry break the action
+          span.set_attribute("gen_ai.request.model", resolved_model) if resolved_model
+          span.set_attribute("gen_ai.response.model", response_model) if response_model
+          span.set_attribute("gen_ai.usage.input_tokens", input_tokens) if input_tokens
+          span.set_attribute("gen_ai.usage.output_tokens", output_tokens) if output_tokens
+          span.set_attribute("gen_ai.usage.cost", cost) if cost
+          span.set_attribute("axn.ruby_llm.stubbed", stubbed) unless stubbed.nil?
+        end
       end
     end
   end
