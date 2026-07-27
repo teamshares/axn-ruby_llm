@@ -415,5 +415,30 @@ RSpec.describe Axn::RubyLLM do
       names = described_class.tools.map { |t| t.new.name }
       expect(names).to eq(names.sort)
     end
+
+    it "wraps only the latest version when two versions share a tool_name (PRO-2955)" do
+      stub_const("AgentTools::Thing::V1", Class.new do
+        include Axn
+
+        tool :ruby_llm
+        tool_version 1
+        description "thing v1"
+        def call; end
+      end)
+      stub_const("AgentTools::Thing::V2", Class.new do
+        include Axn
+
+        tool :ruby_llm
+        tool_version 2
+        description "thing v2"
+        def call; end
+      end)
+
+      # Both versions share tool_name "thing"; Axn.tools_for returns the latest per name, so .tools
+      # wraps only V2 (asserted via V2's distinct description, since the wrap reads it off the Axn).
+      thing = described_class.tools.select { |t| t.new.name == "thing" }
+      expect(thing.size).to eq(1)
+      expect(thing.first.description).to eq("thing v2")
+    end
   end
 end
