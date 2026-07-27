@@ -79,18 +79,18 @@ module Axn
         expose(
           response: parsed_response,
           raw_message: llm_response,
-          input_tokens: llm_response.input_tokens,
-          output_tokens: llm_response.output_tokens,
-          cache_read_tokens: llm_response.cache_read_tokens,
-          cache_write_tokens: llm_response.cache_write_tokens,
+          input_tokens: sum_across(:input_tokens),
+          output_tokens: sum_across(:output_tokens),
+          cache_read_tokens: sum_across(:cache_read_tokens),
+          cache_write_tokens: sum_across(:cache_write_tokens),
           prompt_tokens: total_input_tokens,
           cost_breakdown:,
           cost: cost_breakdown&.total,
           stubbed: false,
         )
         record_otel_attributes!(
-          input_tokens: llm_response.input_tokens,
-          output_tokens: llm_response.output_tokens,
+          input_tokens: sum_across(:input_tokens),
+          output_tokens: sum_across(:output_tokens),
           cost: cost_breakdown&.total,
           response_model: llm_response.model_id,
           stubbed: false,
@@ -129,15 +129,37 @@ module Axn
         json ? JSON.parse(llm_response.content) : llm_response.content
       end
 
+      # A tool call makes multiple model round-trips inside one `ask`; every assistant turn is
+      # accumulated on the chat and reports its OWN usage, so sum across them for the true per-call
+      # totals rather than just the final turn's. Non-response messages (the user prompt, tool
+      # results) carry no tokens — they contribute 0 to the token sums, and RubyLLM::Cost.aggregate
+      # ignores them (no `tokens?`) — so summing over every message is correct, and a plain (no-tool)
+      # ask (one assistant turn) is a no-op.
+      def usage_messages
+        chat.messages
+      end
+
+      # nil only when NO turn reported the field (preserving the "nil if the provider didn't return it"
+      # contract); otherwise the summed count, treating a missing turn as 0.
+      def sum_across(field)
+        values = usage_messages.map(&field)
+        values.all?(&:nil?) ? nil : values.sum(&:to_i)
+      end
+
       def total_input_tokens
-        vals = [llm_response.input_tokens, llm_response.cache_read_tokens, llm_response.cache_write_tokens]
+        vals = usage_messages.flat_map { |m| [m.input_tokens, m.cache_read_tokens, m.cache_write_tokens] }
         vals.all?(&:nil?) ? nil : vals.sum(&:to_i)
       end
 
-      def cost_breakdown
+      memo def cost_breakdown
         return nil unless model_info
 
-        llm_response.cost(model: model_info)
+        costs = usage_messages.map { |message| message.cost(model: model_info) }
+        return nil if costs.empty?
+
+        # One turn → its own Cost (identical to a non-tool call). Multiple → RubyLLM::Cost.aggregate
+        # sums the per-tier costs into a single breakdown.
+        costs.one? ? costs.first : ::RubyLLM::Cost.aggregate(costs)
       end
 
       memo def model_info

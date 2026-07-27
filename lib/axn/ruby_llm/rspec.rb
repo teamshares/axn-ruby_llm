@@ -70,6 +70,8 @@ module Axn
             allow(chat_instance).to receive(:with_schema).and_return(chat_instance)
           end
           allow(chat_instance).to receive(:ask).and_return(llm_message)
+          # Ask sums usage across the chat's assistant turns; a stubbed call is single-turn.
+          allow(chat_instance).to receive(:messages).and_return([llm_message])
           chat_instance
         end
 

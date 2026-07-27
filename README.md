@@ -153,7 +153,7 @@ result.response # => "Created widget Sprocket (id: 42)."
 
 `tools:` accepts a mix of **bare Axn classes** (wrapped automatically) and **already-wrapped tools** from `Axn::RubyLLM.wrap` (a class, or an instance that closed over `ambient_context:` — see below). Pass `tools: Axn::RubyLLM.tools` to expose everything registered under the `:ruby_llm` adapter (see [Enumerating tools](#enumerating-tools-from-the-registry)). The same Axn classes you expose through [axn-mcp](https://github.com/teamshares/axn-mcp) work here unchanged.
 
-> **Token/cost in a tool loop:** a tool call makes multiple model round-trips inside one `ask`. RubyLLM reports usage per message, so `result.input_tokens` / `output_tokens` / `cost` reflect the **final** model response, not the sum across the loop.
+> **Token/cost in a tool loop:** a tool call makes multiple model round-trips inside one `ask`. The token counts, `cost`, and `cost_breakdown` are **summed across every turn**, so they reflect the whole call — not just the final response. (`raw_message` is still the final response.)
 
 `Axn::RubyLLM.wrap` is also available directly if you're driving `RubyLLM.chat` yourself rather than going through `ask` — see [Using wrapped tools with RubyLLM directly](#using-wrapped-tools-with-rubyllm-directly).
 

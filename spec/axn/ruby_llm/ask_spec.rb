@@ -31,6 +31,7 @@ RSpec.describe Axn::RubyLLM::Ask do
     allow(chat_instance).to receive(:with_params).and_return(chat_instance)
     allow(chat_instance).to receive(:with_tools).and_return(chat_instance)
     allow(chat_instance).to receive(:ask).with(prompt).and_return(llm_response)
+    allow(chat_instance).to receive(:messages).and_return([llm_response])
     allow(RubyLLM.models).to receive(:find).with(llm_model_id).and_return(llm_model_info)
     allow(llm_response).to receive(:cost).with(model: llm_model_info).and_return(llm_cost)
   end
@@ -466,6 +467,42 @@ RSpec.describe Axn::RubyLLM::Ask do
       described_class.call(prompt:)
     end
   end
+
+  context "across a tool loop (multiple model round-trips in one ask)" do
+    let(:turn1) do
+      instance_double(RubyLLM::Message, content: "calling a tool", input_tokens: 100, output_tokens: 10,
+                                        cache_read_tokens: nil, cache_write_tokens: nil, model_id: llm_model_id)
+    end
+    let(:turn2) do
+      instance_double(RubyLLM::Message, content: "final answer", input_tokens: 50, output_tokens: 20,
+                                        cache_read_tokens: nil, cache_write_tokens: nil, model_id: llm_model_id)
+    end
+
+    before do
+      allow(turn1).to receive(:cost).with(model: llm_model_info)
+                                    .and_return(RubyLLM::Cost.new(amounts: { input: 0.001, output: 0.002 }, has_tokens: true, missing: []))
+      allow(turn2).to receive(:cost).with(model: llm_model_info)
+                                    .and_return(RubyLLM::Cost.new(amounts: { input: 0.0005, output: 0.001 }, has_tokens: true, missing: []))
+      # The chat accumulates both assistant turns; ask returns the final one.
+      allow(chat_instance).to receive(:messages).and_return([turn1, turn2])
+      allow(chat_instance).to receive(:ask).with(prompt).and_return(turn2)
+    end
+
+    it "sums token usage across every turn, not just the final one" do
+      expect(result.input_tokens).to eq(150)
+      expect(result.output_tokens).to eq(30)
+      expect(result.prompt_tokens).to eq(150)
+    end
+
+    it "sums cost across every turn" do
+      expect(result.cost).to be_within(1e-9).of(0.0045)
+      expect(result.cost_breakdown.total).to be_within(1e-9).of(0.0045)
+    end
+
+    it "still exposes the final turn as raw_message" do
+      expect(result.raw_message).to eq(turn2)
+    end
+  end
 end
 
 RSpec.describe "Axn::RubyLLM::Ask OTel attribute enrichment" do
@@ -507,6 +544,7 @@ RSpec.describe "Axn::RubyLLM::Ask OTel attribute enrichment" do
     allow(chat_instance).to receive(:with_params).and_return(chat_instance)
     allow(chat_instance).to receive(:with_schema).and_return(chat_instance)
     allow(chat_instance).to receive(:ask).and_return(llm_response)
+    allow(chat_instance).to receive(:messages).and_return([llm_response])
     allow(RubyLLM.models).to receive(:find).and_return(nil)
     allow(llm_response).to receive(:cost).and_return(nil)
     allow(Axn::Internal::Tracing).to receive(:tracer).and_return(fake_axn_tracer)
