@@ -13,6 +13,7 @@ module Axn
     setting :halt_after, default: false, overridable: true
     setting :provider_params, default: {}, overridable: true
     setting :present_as, default: :structured, one_of: %i[structured message], overridable: true
+    setting :reject_opaque_exposed_values, default: false, one_of: [true, false], overridable: true
 
     # Wraps any Axn as a ::RubyLLM::Tool: schema, name, and description are read straight off the
     # Axn's own declared contract (`input_schema` / `resolved_axn_name` / `description`, from axn's
@@ -29,6 +30,7 @@ module Axn
             halt_after: halt_after.nil? ? Axn::RubyLLM.resolve_override_for(axn_class, :halt_after) : halt_after,
             provider_params: provider_params.nil? ? Axn::RubyLLM.resolve_override_for(axn_class, :provider_params) : provider_params,
             present_as: present_as.nil? ? Axn::RubyLLM.resolve_override_for(axn_class, :present_as) : present_as,
+            reject_opaque: Axn::RubyLLM.resolve_override_for(axn_class, :reject_opaque_exposed_values),
             ambient_context:,
           )
 
@@ -55,7 +57,7 @@ module Axn
           raise ArgumentError, "present_as must be one of :structured, :message; got #{present_as.inspect}#{hint}"
         end
 
-        def build_tool_class(axn_class, halt_after:, provider_params:, present_as:, ambient_context:)
+        def build_tool_class(axn_class, halt_after:, provider_params:, present_as:, reject_opaque:, ambient_context:)
           # Core's canonical, provider-safe tool_name (PRO-2921): strips configured leading prefixes,
           # snake_cases with single underscores, restricts to [a-z0-9_], and is never blank (anonymous
           # -> "tool"). The same Axn class wraps to the same name across every adapter (Axn::MCP.wrap
@@ -97,7 +99,7 @@ module Axn
               payload = if present_as == :message
                           result.message
                         else
-                          Axn::Reflection::Values.serialize_exposed(result, axn_class.external_field_configs).to_json
+                          Axn::Reflection::Values.serialize_exposed(result, axn_class.external_field_configs, reject_opaque:).to_json
                         end
               halt_after ? halt(payload) : payload
             rescue ::Axn::Reflection::UnserializableValue, ::JSON::NestingError, ::JSON::GeneratorError => e

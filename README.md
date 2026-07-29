@@ -259,6 +259,22 @@ expects :priority, type: { klass: Symbol, coerce: true } # explicit form, e.g. a
 
 Opt-in per field — a field with no `coerce:` is unaffected. A non-String value (a direct Ruby caller's real `Date`, a JSON-native number) is left untouched either way.
 
+### Opaque exposed values — `reject_opaque_exposed_values`
+
+A tool's result is the Axn's exposed values serialized to JSON. A value with **no author-declared JSON form** — no `to_json`/`as_json` of its own — has no honest representation and can only render as an *opaque blob*: `"#<User:0x000…>"` outside Rails, or ActiveSupport's generic instance-variable dump under it. By default that blob ships, because for an LLM tool result an ugly-but-honest string usually beats a failed call.
+
+Set `reject_opaque_exposed_values` (default `false`) to reject it instead. Serialization then raises `Axn::Reflection::UnserializableValue` (naming the path, e.g. `records[3].owner`), which the adapter returns as a tool error rather than shipping the blob:
+
+```ruby
+CreateWidget.configure(:ruby_llm) { |c| c.reject_opaque_exposed_values = true }   # per tool (wins)
+Axn::RubyLLM.configure           { |c| c.reject_opaque_exposed_values = true }    # gem-wide default
+```
+
+Scope:
+
+- **Output-side only.** It governs `exposes` serialization, never inbound `coerce:` on `expects`.
+- **Narrow.** Values with *no honest JSON form at all* — reference cycles, non-finite Floats, non-UTF-8 bytes, two Hash keys colliding onto one property — raise `UnserializableValue` **regardless** of this flag (and surface as a tool error). `reject_opaque_exposed_values` only adds the extra "was this rendering author-declared?" check on top.
+
 ### Schema reflection — provider notes
 
 The advertised tool schema is axn's reflected `input_schema`. A few things worth knowing when you care how it lands at a specific provider (Gemini is the strictest — it runs a mandatory OpenAPI-subset converter; OpenAI and Anthropic pass the schema through as-is):

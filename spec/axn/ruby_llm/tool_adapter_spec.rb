@@ -256,6 +256,50 @@ RSpec.describe Axn::RubyLLM do
       end
     end
 
+    describe "reject_opaque_exposed_values" do
+      # An exposed value with no author-declared JSON form: no to_json/as_json, so it can only render
+      # as an opaque blob ("#<OpaqueValue:0x…>").
+      let(:opaque_axn) do
+        Class.new do
+          include Axn
+
+          exposes :obj
+          def call = expose(obj: OpaqueValue.new)
+        end
+      end
+
+      before { stub_const("OpaqueValue", Class.new) }
+      after { Axn::RubyLLM.reset_config! }
+
+      it "ships the opaque rendering by default (false)" do
+        payload = described_class.wrap(opaque_axn).new.execute
+        expect(payload).to be_a(String)
+        expect(JSON.parse(payload)["obj"]).to be_a(String).and include("OpaqueValue")
+      end
+
+      it "surfaces a tool error (not an escaping raise) when enabled gem-wide" do
+        Axn::RubyLLM.configure { |c| c.reject_opaque_exposed_values = true }
+
+        expect { described_class.wrap(opaque_axn).new.execute }.not_to raise_error
+        expect(described_class.wrap(opaque_axn).new.execute).to match(error: /could not be serialized/)
+      end
+
+      it "honors a per-class configure(:ruby_llm) override" do
+        opaque_axn.configure(:ruby_llm) { |c| c.reject_opaque_exposed_values = true }
+
+        expect(described_class.wrap(opaque_axn).new.execute).to match(error: /could not be serialized/)
+      end
+
+      it "lets a per-class false beat a gem-wide true (per-class wins)" do
+        Axn::RubyLLM.configure { |c| c.reject_opaque_exposed_values = true }
+        opaque_axn.configure(:ruby_llm) { |c| c.reject_opaque_exposed_values = false }
+
+        payload = described_class.wrap(opaque_axn).new.execute
+        expect(payload).to be_a(String)
+        expect(JSON.parse(payload)["obj"]).to include("OpaqueValue")
+      end
+    end
+
     describe "halt_after:" do
       it "wraps a successful payload in RubyLLM::Tool::Halt when true" do
         tool = described_class.wrap(greeter, halt_after: true).new
