@@ -220,6 +220,42 @@ RSpec.describe Axn::RubyLLM do
       end
     end
 
+    describe "serialization failures surface as a tool error, not an escaping exception" do
+      # RubyLLM has no rescue around a tool's #execute, so an unhandled raise here would break the
+      # whole chat. Both of core's serialize paths can raise, and both must become a tool error.
+
+      it "maps a core-unserializable value (colliding JSON keys) to a tool error" do
+        klass = Class.new do
+          include Axn
+
+          exposes :rec
+          def call = expose(rec: { id: 1, "id" => 2 })
+        end
+
+        expect { described_class.wrap(klass).new.execute }.not_to raise_error
+        expect(described_class.wrap(klass).new.execute).to match(error: /could not be serialized/)
+      end
+
+      it "maps a structure past the JSON encoder's max_nesting to a tool error" do
+        klass = Class.new do
+          include Axn
+
+          exposes :deep
+          def call
+            root = leaf = {}
+            130.times do
+              node = {}
+              leaf["k"] = node
+              leaf = node
+            end
+            expose(deep: root)
+          end
+        end
+
+        expect(described_class.wrap(klass).new.execute).to match(error: /could not be serialized/)
+      end
+    end
+
     describe "halt_after:" do
       it "wraps a successful payload in RubyLLM::Tool::Halt when true" do
         tool = described_class.wrap(greeter, halt_after: true).new

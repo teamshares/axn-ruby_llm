@@ -100,6 +100,13 @@ module Axn
                           Axn::Reflection::Values.serialize_exposed(result, axn_class.external_field_configs).to_json
                         end
               halt_after ? halt(payload) : payload
+            rescue ::Axn::Reflection::UnserializableValue, ::JSON::NestingError, ::JSON::GeneratorError => e
+              # serialize_exposed raises UnserializableValue for a value core can't render (two Hash
+              # keys colliding on one JSON property, a non-finite Float, non-UTF-8 bytes); `.to_json`
+              # raises a JSON nesting/generator error past the encoder's max_nesting (an encoder
+              # option core deliberately doesn't own). RubyLLM has no rescue around a tool's #execute,
+              # so either would escape and break the whole chat — surface it as a tool error instead.
+              { error: "Tool result could not be serialized: #{e.message}" }
             end
           end
         end
