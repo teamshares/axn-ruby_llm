@@ -22,7 +22,7 @@
 
 ### Requires
 
-- An `axn` version providing core contract reflection, the tool registry (per-adapter `tool_roots` + union membership) with canonical `tool_name`, the tool `Invoker` (input-validation surfacing), the extension-author surface (`Axn::Extensions.best_effort`), and namespaced per-class `configure(...)`. Currently tracked against `axn` `main`; see the release checklist on the PR before publishing.
+- An `axn` version providing core contract reflection, the tool registry (per-adapter `tool_roots` + union membership) with canonical `tool_name`, the tool `Invoker` (input-validation surfacing), the extension-author surface (`Axn::Extensions.best_effort` and the `Axn::Extensions::Serialization.render` result serializer — axn [#207](https://github.com/teamshares/axn/pull/207) / PRO-2992, which made `Axn::Reflection::Values.serialize_exposed` private), and namespaced per-class `configure(...)`. Currently tracked against `axn` `main`; see the release checklist on the PR before publishing.
 
 ## [0.1.3] - 2026-06-26
 
