@@ -25,7 +25,7 @@ module Axn
 
     # Register this module as the `:ruby_llm` adapter AND its config source (PRO-2948): the registry
     # reads `Axn::RubyLLM.config.tool_roots` off the source to grant directory-based membership.
-    Axn.register_tool_adapter(:ruby_llm, self)
+    Axn::Tools.register_adapter(:ruby_llm, self)
 
     mount_axn :ask, Ask
 

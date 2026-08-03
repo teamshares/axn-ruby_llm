@@ -226,7 +226,7 @@ Rather than wiring each tool up by hand, let axn's tool registry find them and b
 chat = RubyLLM.chat.with_tools(*Axn::RubyLLM.tools)
 ```
 
-`Axn::RubyLLM.tools` returns every Axn registered under the `:ruby_llm` adapter, already wrapped as a `::RubyLLM::Tool` — sugar for `Axn.tools_for(:ruby_llm).map { |axn| Axn::RubyLLM.wrap(axn) }`, in a stable, `tool_name`-sorted order.
+`Axn::RubyLLM.tools` returns every Axn registered under the `:ruby_llm` adapter, already wrapped as a `::RubyLLM::Tool` — sugar for `Axn::Tools.for(:ruby_llm).map { |axn| Axn::RubyLLM.wrap(axn) }`, in a stable, `tool_name`-sorted order.
 
 **Membership = (directory grant ∪ declaration grant) − exclusions.** An Axn is a `:ruby_llm` tool if either:
 
@@ -263,7 +263,7 @@ Opt-in per field — a field with no `coerce:` is unaffected. A non-String value
 
 A tool's result is the Axn's exposed values serialized to JSON. A value with **no author-declared JSON form** — no `to_json`/`as_json` of its own — has no honest representation and can only render as an *opaque blob*: `"#<User:0x000…>"` outside Rails, or ActiveSupport's generic instance-variable dump under it. By default that blob ships, because for an LLM tool result an ugly-but-honest string usually beats a failed call.
 
-Set `reject_opaque_exposed_values` (default `false`) to reject it instead. Serialization then raises `Axn::Reflection::UnserializableValue` (naming the path, e.g. `records[3].owner`), which the adapter returns as a tool error rather than shipping the blob:
+Set `reject_opaque_exposed_values` (default `false`) to reject it instead. Serialization then raises `Axn::Extensions::Serialization::UnserializableValue` (naming the path, e.g. `records[3].owner`), which the adapter returns as a tool error rather than shipping the blob:
 
 ```ruby
 CreateWidget.configure(:ruby_llm) { |c| c.reject_opaque_exposed_values = true }   # per tool (wins)

@@ -102,7 +102,7 @@ module Axn
                           Axn::Extensions::Serialization.render(result, reject_opaque:).to_json
                         end
               halt_after ? halt(payload) : payload
-            rescue ::Axn::Reflection::UnserializableValue, ::JSON::NestingError, ::JSON::GeneratorError => e
+            rescue ::Axn::Extensions::Serialization::UnserializableValue, ::JSON::NestingError, ::JSON::GeneratorError => e
               # render raises UnserializableValue for a value core can't render (two Hash keys
               # colliding on one JSON property, a non-finite Float, non-UTF-8 bytes); `.to_json`
               # raises a JSON nesting/generator error past the encoder's max_nesting (an encoder
@@ -154,7 +154,7 @@ module Axn
       # one call: `chat.with_tools(*Axn::RubyLLM.tools)`. Mirrors the shared GemName.tools contract
       # with Axn::MCP.tools; the same Axn class resolves to the same tool_name across both surfaces.
       def tools
-        Axn.tools_for(:ruby_llm).map { |axn| wrap(axn) }
+        Axn::Tools.for(:ruby_llm).map { |axn| wrap(axn) }
       end
     end
   end

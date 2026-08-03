@@ -85,7 +85,7 @@ RSpec.describe Axn::RubyLLM do
         end
 
         props = described_class.wrap(enum_axn).new.params_schema["properties"]
-        expect(props["color"]).to eq("type" => "string", "enum" => %w[red green blue])
+        expect(props["color"]).to eq("type" => "string", "enum" => %w[red green blue], "minLength" => 1)
         expect(props["shade"]).to eq(
           "enum" => ["light", "dark", nil],
           "anyOf" => [{ "type" => "string" }, { "type" => "null" }],
@@ -156,7 +156,7 @@ RSpec.describe Axn::RubyLLM do
       # surfaces as a clean, correctable "Invalid tool arguments: <axn message>" (and never pages
       # on_exception), rather than the adapter pre-checking a shallow subset of the schema itself.
       it "returns an invalid-arguments error for a missing required field" do
-        expect(tool.execute).to eq(error: "Invalid tool arguments: Name is not a String and Name can't be blank")
+        expect(tool.execute).to eq(error: "Invalid tool arguments: Name is not a String")
       end
 
       it "returns an invalid-arguments error for an argument outside the schema" do
@@ -449,7 +449,7 @@ RSpec.describe Axn::RubyLLM do
       end
       stub_const("RegistryViaTool::Widget", widget)
 
-      expect(Axn.tools_for(:ruby_llm)).to include(RegistryViaTool::Widget)
+      expect(Axn::Tools.for(:ruby_llm)).to include(RegistryViaTool::Widget)
     end
 
     it "enumerates Axns that opt in implicitly via configure(:ruby_llm)" do
@@ -461,7 +461,7 @@ RSpec.describe Axn::RubyLLM do
       end
       stub_const("RegistryViaConfig::Widget", widget)
 
-      expect(Axn.tools_for(:ruby_llm)).to include(RegistryViaConfig::Widget)
+      expect(Axn::Tools.for(:ruby_llm)).to include(RegistryViaConfig::Widget)
     end
   end
 
@@ -482,7 +482,7 @@ RSpec.describe Axn::RubyLLM do
       expect(tools.map { |t| t.new.name }).to include(ToolsHelper::Widget.tool_name)
     end
 
-    it "returns tools in deterministic tool_name order (core sorts tools_for, PRO-2933)" do
+    it "returns tools in deterministic tool_name order (core sorts Axn::Tools.for, PRO-2933)" do
       %w[Zebra Alpha Mango].each do |n|
         stub_const("SortCheck::#{n}", Class.new do
           include Axn
@@ -514,7 +514,7 @@ RSpec.describe Axn::RubyLLM do
         def call; end
       end)
 
-      # Both versions share tool_name "thing"; Axn.tools_for returns the latest per name, so .tools
+      # Both versions share tool_name "thing"; Axn::Tools.for returns the latest per name, so .tools
       # wraps only V2 (asserted via V2's distinct description, since the wrap reads it off the Axn).
       thing = described_class.tools.select { |t| t.new.name == "thing" }
       expect(thing.size).to eq(1)
