@@ -335,6 +335,8 @@ Axn::RubyLLM.configure do |c|
 end
 ```
 
+To read the resolved gate, use **`Axn::RubyLLM.enabled?`** — it invokes an assigned callable and returns a Boolean. (Don't use the DSL-generated `Axn::RubyLLM.config.enabled?`: axn's `Configurable` returns an assigned Proc as-is rather than calling it, so for a callable that predicate is always truthy.)
+
 When disabled, `Axn::RubyLLM.ask` returns a **success** result with obvious stub content, so callers don't need per-callsite branching:
 
 | Field | Stubbed value |

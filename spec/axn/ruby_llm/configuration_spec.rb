@@ -9,7 +9,7 @@ RSpec.describe "Axn::RubyLLM configuration" do
     end
 
     it "defaults enabled to true" do
-      expect(Axn::RubyLLM.config.enabled?).to be(true)
+      expect(Axn::RubyLLM.enabled?).to be(true)
     end
 
     it "defaults error_headline to 'LLM request failed'" do
@@ -45,28 +45,36 @@ RSpec.describe "Axn::RubyLLM configuration" do
     end
   end
 
-  describe "#enabled?" do
-    it "returns true for enabled = true" do
-      Axn::RubyLLM.configure { |c| c.enabled = true }
-      expect(Axn::RubyLLM.config.enabled?).to be(true)
+  # `Axn::RubyLLM.enabled?` is the supported reader — it resolves a callable. axn's Configurable no
+  # longer invokes an assigned callable on read (PRO-3017 removed `callable:`), so the DSL-generated
+  # `config.enabled?` returns a Proc as-is (truthy); the callable cases below are the regression that
+  # silently re-enables gating everywhere if this reader stops resolving.
+  describe ".enabled?" do
+    it "is true when unset (default)" do
+      expect(Axn::RubyLLM.enabled?).to be(true)
     end
 
-    it "returns false for enabled = false" do
+    it "is false when set to false" do
       Axn::RubyLLM.configure { |c| c.enabled = false }
-      expect(Axn::RubyLLM.config.enabled?).to be(false)
+      expect(Axn::RubyLLM.enabled?).to be(false)
     end
 
-    it "evaluates a callable" do
+    it "invokes a callable returning false" do
       Axn::RubyLLM.configure { |c| c.enabled = -> { false } }
-      expect(Axn::RubyLLM.config.enabled?).to be(false)
+      expect(Axn::RubyLLM.enabled?).to be(false)
     end
 
-    it "resolves a callable on each read" do
+    it "invokes a callable returning true" do
+      Axn::RubyLLM.configure { |c| c.enabled = -> { true } }
+      expect(Axn::RubyLLM.enabled?).to be(true)
+    end
+
+    it "resolves the callable on each read" do
       toggle = true
       Axn::RubyLLM.configure { |c| c.enabled = -> { toggle } }
-      expect(Axn::RubyLLM.config.enabled?).to be(true)
+      expect(Axn::RubyLLM.enabled?).to be(true)
       toggle = false
-      expect(Axn::RubyLLM.config.enabled?).to be(false)
+      expect(Axn::RubyLLM.enabled?).to be(false)
     end
   end
 

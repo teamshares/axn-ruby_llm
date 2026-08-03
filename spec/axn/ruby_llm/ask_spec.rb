@@ -547,12 +547,15 @@ RSpec.describe "Axn::RubyLLM::Ask OTel attribute enrichment" do
     allow(chat_instance).to receive(:messages).and_return([llm_response])
     allow(RubyLLM.models).to receive(:find).and_return(nil)
     allow(llm_response).to receive(:cost).and_return(nil)
-    allow(Axn::Internal::Tracing).to receive(:tracer).and_return(fake_axn_tracer)
+    Axn.config.tracer = fake_axn_tracer
     stub_const("OpenTelemetry::Trace", Module.new)
     allow(OpenTelemetry::Trace).to receive(:current_span).and_return(span)
   end
 
-  after { Axn::RubyLLM.reset_config! }
+  after do
+    Axn::RubyLLM.reset_config!
+    Axn.config.reset!(:tracer)
+  end
 
   it "sets gen_ai and cost attributes on the current span for a normal call" do
     Axn::RubyLLM.ask(prompt:)

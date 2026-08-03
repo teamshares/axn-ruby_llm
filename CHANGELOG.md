@@ -19,6 +19,7 @@
 
 - **`Ask` failures now carry a consistent `"LLM request failed: <reason>"` message, with more specific reasons.** Rate limits, transient provider errors (5xx → "Provider temporarily unavailable, try again later"), context-length-exceeded, and invalid-JSON responses each get their own wording; the provider's own message is preserved where useful. Unrecognized exceptions (likely bugs, not known RubyLLM/network failures) now fail with the bare headline and no leaked exception detail — error reporting via `Axn.config.on_exception` is unaffected. See the README's "Errors" section.
 - **OpenTelemetry attribute recording is guarded by axn's `Extensions.best_effort` helper** — a telemetry failure now warn-logs (and fails loud in development) instead of vanishing silently, while still never breaking the LLM call.
+- **Production gating: read the resolved gate via `Axn::RubyLLM.enabled?`.** axn's `Configurable` dropped its `callable:` kwarg (axn [#209](https://github.com/teamshares/axn/pull/209) / PRO-3017), so it no longer invokes an assigned `enabled` callable on read. Callable resolution moved into this gem — `Axn::RubyLLM.enabled?` invokes the callable and returns a Boolean, and is the supported reader. The DSL-generated `Axn::RubyLLM.config.enabled?` returns an assigned Proc as-is (always truthy) and must not be used for the gate.
 
 ### Requires
 

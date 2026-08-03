@@ -13,7 +13,7 @@ module Axn
     extend Axn::Tools::AdapterRoots
 
     setting :default_model, default: "gpt-4o-mini"
-    setting :enabled, default: true, callable: true
+    setting :enabled, default: true
     setting :error_headline, default: "LLM request failed"
 
     # `Axn::Tools::AdapterRoots` (extended above) declares `tool_roots` with `default: []`; re-declare
@@ -30,6 +30,17 @@ module Axn
     mount_axn :ask, Ask
 
     class << self
+      # `enabled` accepts a Boolean OR a callable — the documented production-gating idiom is
+      # `c.enabled = -> { Rails.env.production? }`. axn's Configurable used to invoke an assigned
+      # callable on read via `callable: true`; that kwarg was removed upstream (PRO-3017) and an
+      # assigned Proc is now returned as-is, so resolve it here. Without this the DSL-generated
+      # `config.enabled?` is `!!some_proc` — always true — and production gating dies silently.
+      # This (`Axn::RubyLLM.enabled?`), NOT `config.enabled?`, is the supported reader.
+      def enabled?
+        value = config.enabled
+        value.respond_to?(:call) ? !!value.call : !!value
+      end
+
       # DEPRECATED backward-compatible aliases for the pre-DSL API. The
       # Axn::Configurable DSL standardizes on `.config` / `reset_config!`.
       # These keep older callers working but emit a deprecation warning and

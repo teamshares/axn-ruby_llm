@@ -101,7 +101,7 @@ module Axn
 
       private
 
-      def disabled? = !Axn::RubyLLM.config.enabled?
+      def disabled? = !Axn::RubyLLM.enabled?
 
       def stubbed_exposures
         content = schema || json ? { "stubbed" => true } : "stubbed response value"
