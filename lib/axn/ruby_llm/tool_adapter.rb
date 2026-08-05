@@ -67,9 +67,14 @@ module Axn
         def build_tool_class(axn_class, halt_after:, provider_params:, present_as:, reject_opaque:, ambient_context:)
           # Core's canonical, provider-safe tool_name (PRO-2921): strips configured leading prefixes,
           # snake_cases with single underscores, restricts to [a-z0-9_], and is never blank (anonymous
-          # -> "tool"). The same Axn class wraps to the same name across every adapter (Axn::MCP.wrap
-          # included) -- the author-once point.
-          tool_name = axn_class.tool_name
+          # -> "tool"). Pass the `:ruby_llm` adapter key so a per-adapter `tool ruby_llm: { name: }`
+          # override wins -- this is the SAME name `Axn::Tools.for(:ruby_llm)` keys membership,
+          # version-collapsing, and sort order on (registry.rb), so `.tools` publishes the exact name
+          # the registry selected; the zero-arg form would ignore the override and advertise a
+          # different name, so provider tool calls / forced choices on the declared name wouldn't
+          # match. Absent an override it's identical to the zero-arg name (Axn::MCP.wrap passes `:mcp`
+          # the same way -- the author-once point).
+          tool_name = axn_class.tool_name(:ruby_llm)
           input_schema = normalize_nullable_types(axn_class.input_schema)
 
           Class.new(::RubyLLM::Tool) do

@@ -121,6 +121,26 @@ RSpec.describe Axn::RubyLLM do
         expect(described_class.wrap(Some::Nested::Widget).new.name).to eq(Some::Nested::Widget.tool_name)
       end
 
+      it "honors a per-adapter `tool ruby_llm: { name: }` override (the name the registry keys on)" do
+        # Core keys registry membership, version-collapsing, and sort order for Axn::Tools.for(:ruby_llm)
+        # on tool_name(:ruby_llm). The wrapper must publish that same adapter-keyed name, or a provider
+        # tool call / forced choice on the declared name wouldn't match the function we advertised.
+        renamed = Class.new do
+          include Axn
+
+          tool ruby_llm: { name: "search_web" }
+          expects :q, type: String
+          exposes :hits
+          def call = expose(hits: [])
+        end
+        stub_const("Legacy::FindStuff", renamed)
+
+        expect(described_class.wrap(Legacy::FindStuff).new.name).to eq("search_web")
+        expect(described_class.wrap(Legacy::FindStuff).new.name).to eq(Legacy::FindStuff.tool_name(:ruby_llm))
+        # ...and NOT the zero-arg name the override is meant to supersede.
+        expect(Legacy::FindStuff.tool_name(:ruby_llm)).not_to eq(Legacy::FindStuff.tool_name)
+      end
+
       it "falls back to core tool_name's never-blank default for a truly anonymous class" do
         anonymous = Class.new do
           include Axn
