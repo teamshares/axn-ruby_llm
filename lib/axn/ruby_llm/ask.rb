@@ -92,7 +92,7 @@ module Axn
           input_tokens: sum_across(:input_tokens),
           output_tokens: sum_across(:output_tokens),
           cost: cost_breakdown&.total,
-          response_model: llm_response.model_id,
+          response_model: response_message&.model_id,
           stubbed: false,
         )
       rescue ::RubyLLM::RateLimitError => e
@@ -163,12 +163,25 @@ module Axn
       end
 
       memo def model_info
-        ::RubyLLM.models.find(llm_response.model_id)
+        return nil unless response_message&.model_id
+
+        ::RubyLLM.models.find(response_message.model_id)
       rescue ::RubyLLM::ModelNotFoundError
         nil
       end
 
       memo def llm_response = chat.ask(prompt)
+
+      # When a wrapped tool halts the loop (halt_after:), chat.ask returns a ::RubyLLM::Tool::Halt
+      # carrying the tool payload as #content, not a Message — and a Halt has no #model_id. Read the
+      # model (for cost lookup + OTel) from the last assistant turn accumulated on the chat in that
+      # case; for a normal response, llm_response IS that final message. Token/cost SUMS already read
+      # chat.messages, so only the model-id reads needed this indirection.
+      def response_message
+        return llm_response unless llm_response.is_a?(::RubyLLM::Tool::Halt)
+
+        chat.messages.reverse.find { |message| message.role == :assistant }
+      end
 
       memo def chat
         ::RubyLLM.chat(model: resolved_model).tap do |c|

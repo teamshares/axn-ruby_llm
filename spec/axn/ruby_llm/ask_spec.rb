@@ -503,6 +503,39 @@ RSpec.describe Axn::RubyLLM::Ask do
       expect(result.raw_message).to eq(turn2)
     end
   end
+
+  context "when a wrapped tool halts the loop (halt_after:)" do
+    # chat.ask returns a ::RubyLLM::Tool::Halt (tool payload as #content), NOT a Message — and a Halt
+    # has no #model_id, so reading model/cost data off it would raise NoMethodError and turn a
+    # successful halt into "LLM request failed". Model/cost must come from the last assistant turn.
+    let(:halt_payload) { { "greeting" => "hi" }.to_json }
+    let(:halt) { RubyLLM::Tool::Halt.new(halt_payload) }
+    let(:assistant_turn) do
+      instance_double(RubyLLM::Message, role: :assistant, content: "", input_tokens: 42, output_tokens: 7,
+                                        cache_read_tokens: nil, cache_write_tokens: nil, model_id: llm_model_id)
+    end
+
+    before do
+      allow(assistant_turn).to receive(:cost).with(model: llm_model_info)
+                                             .and_return(RubyLLM::Cost.new(amounts: { input: 0.001, output: 0.002 }, has_tokens: true, missing: []))
+      allow(chat_instance).to receive(:ask).with(prompt).and_return(halt)
+      allow(chat_instance).to receive(:messages).and_return([assistant_turn])
+    end
+
+    it "succeeds instead of crashing on the Halt's missing model_id" do
+      expect(result).to be_ok
+    end
+
+    it "exposes the halted tool payload as the response" do
+      expect(result.response).to eq(halt_payload)
+    end
+
+    it "derives model, tokens, and cost from the last assistant turn" do
+      expect(result.input_tokens).to eq(42)
+      expect(result.output_tokens).to eq(7)
+      expect(result.cost).to be_within(1e-9).of(0.003)
+    end
+  end
 end
 
 RSpec.describe "Axn::RubyLLM::Ask OTel attribute enrichment" do
