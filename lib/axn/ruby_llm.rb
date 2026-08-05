@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "delegate"
 require "ruby_llm"
 require "axn"
 
@@ -29,6 +30,16 @@ module Axn
 
     mount_axn :ask, Ask
 
+    # Backward-compatible view of `config` returned by the deprecated `configuration` alias. The
+    # pre-DSL `Configuration#enabled?` invoked a callable gate (`enabled = -> { ... }`); the
+    # DSL-generated `config.enabled?` returns an assigned Proc as-is (always truthy). Delegate
+    # everything to `config`, but restore the callable-resolving `enabled?` (via the module-level
+    # `enabled?`) so a compatibility caller's production gate still resolves correctly during the
+    # deprecation window instead of silently reading as enabled. Removed with the alias in 0.3.0.
+    class DeprecatedConfigProxy < SimpleDelegator
+      def enabled? = Axn::RubyLLM.enabled?
+    end
+
     class << self
       # `enabled` accepts a Boolean OR a callable — the documented production-gating idiom is
       # `c.enabled = -> { Rails.env.production? }`. axn's Configurable used to invoke an assigned
@@ -47,7 +58,7 @@ module Axn
       # are scheduled for removal in the next minor version (see DEPRECATIONS.md).
       def configuration
         _warn_deprecated_alias("Axn::RubyLLM.configuration", "Axn::RubyLLM.config")
-        config
+        DeprecatedConfigProxy.new(config)
       end
 
       def reset_configuration!

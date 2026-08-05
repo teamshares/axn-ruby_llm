@@ -98,7 +98,19 @@ RSpec.describe "Axn::RubyLLM configuration" do
       expect { result = Axn::RubyLLM.configuration }
         .to output(/DEPRECATION: Axn::RubyLLM\.configuration is deprecated.*use Axn::RubyLLM\.config instead/)
         .to_stderr
-      expect(result).to equal(Axn::RubyLLM.config)
+      # A backward-compatible view that delegates to the real config (see enabled? cases below).
+      expect(result.default_model).to eq(Axn::RubyLLM.config.default_model)
+    end
+
+    # The pre-DSL Configuration#enabled? invoked a callable gate; the DSL predicate treats a Proc as
+    # truthy. The alias must preserve the callable-resolving behavior so a compat caller's production
+    # gate doesn't silently read as enabled during the deprecation window.
+    it "resolves a callable gate through .configuration.enabled? (not the raw-Proc DSL predicate)" do
+      Axn::RubyLLM.configure { |c| c.enabled = -> { false } }
+      result = nil
+      expect { result = Axn::RubyLLM.configuration.enabled? }.to output(/DEPRECATION/).to_stderr
+      expect(result).to be(false)
+      expect(Axn::RubyLLM.config.enabled?).to be(true) # the DSL predicate the alias must not regress to
     end
 
     it "supports configuring via the .configuration alias" do
