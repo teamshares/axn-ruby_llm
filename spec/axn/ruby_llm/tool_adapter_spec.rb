@@ -233,7 +233,7 @@ RSpec.describe Axn::RubyLLM do
         end
 
         expect { described_class.wrap(klass).new.execute }.not_to raise_error
-        expect(described_class.wrap(klass).new.execute).to match(error: /could not be serialized/)
+        expect(described_class.wrap(klass).new.execute).to eq(error: Axn::RubyLLM::ToolAdapter::ADAPTER_FAILURE_MESSAGE)
       end
 
       it "maps a structure past the JSON encoder's max_nesting to a tool error" do
@@ -252,7 +252,52 @@ RSpec.describe Axn::RubyLLM do
           end
         end
 
-        expect(described_class.wrap(klass).new.execute).to match(error: /could not be serialized/)
+        expect(described_class.wrap(klass).new.execute).to eq(error: Axn::RubyLLM::ToolAdapter::ADAPTER_FAILURE_MESSAGE)
+      end
+    end
+
+    describe "transport-failure guard (upholds axn's non-bang never-raises at the adapter boundary)" do
+      # A value with no honest JSON form makes serialization raise AFTER the Axn already succeeded --
+      # in the transport step, outside core's executor (the gap core's own on_exception doesn't
+      # cover). The guard turns that into a tool error + a global on_exception report; the existing
+      # "serialization failures surface as a tool error" specs above cover the no-raise/error-return
+      # side, so these cover the reporting + dev-reraise + any-StandardError side (axn-mcp parity).
+      let(:dup_key_axn) do
+        Class.new do
+          include Axn
+
+          def self.name = "GuardDupKey"
+
+          exposes :rec
+          def call = expose(rec: { id: 1, "id" => 2 })
+        end
+      end
+
+      it "reports the failure through axn's global on_exception hook (observability, not silent)" do
+        captured = nil
+        allow(Axn.config).to receive(:on_exception) { |e, **| captured = e }
+
+        described_class.wrap(dup_key_axn).new.execute
+
+        expect(captured).to be_a(Axn::Extensions::Serialization::UnserializableValue)
+      end
+
+      it "re-raises rather than swallowing when core's raises_in_dev? is on (bugs surface loudly)" do
+        allow(Axn::Extensions).to receive(:raises_in_dev?).and_return(true)
+
+        expect { described_class.wrap(dup_key_axn).new.execute }
+          .to raise_error(Axn::Extensions::Serialization::UnserializableValue)
+      end
+
+      it "guards ANY StandardError from the mapping step, not only serialization" do
+        allow(Axn::Extensions::Serialization).to receive(:render).and_raise(RuntimeError, "boom")
+        captured = nil
+        allow(Axn.config).to receive(:on_exception) { |e, **| captured = e }
+
+        response = described_class.wrap(dup_key_axn).new.execute
+
+        expect(response).to eq(error: Axn::RubyLLM::ToolAdapter::ADAPTER_FAILURE_MESSAGE)
+        expect(captured).to be_a(RuntimeError)
       end
     end
 
@@ -281,13 +326,13 @@ RSpec.describe Axn::RubyLLM do
         Axn::RubyLLM.configure { |c| c.reject_opaque_exposed_values = true }
 
         expect { described_class.wrap(opaque_axn).new.execute }.not_to raise_error
-        expect(described_class.wrap(opaque_axn).new.execute).to match(error: /could not be serialized/)
+        expect(described_class.wrap(opaque_axn).new.execute).to eq(error: Axn::RubyLLM::ToolAdapter::ADAPTER_FAILURE_MESSAGE)
       end
 
       it "honors a per-class configure(:ruby_llm) override" do
         opaque_axn.configure(:ruby_llm) { |c| c.reject_opaque_exposed_values = true }
 
-        expect(described_class.wrap(opaque_axn).new.execute).to match(error: /could not be serialized/)
+        expect(described_class.wrap(opaque_axn).new.execute).to eq(error: Axn::RubyLLM::ToolAdapter::ADAPTER_FAILURE_MESSAGE)
       end
 
       it "lets a per-class false beat a gem-wide true (per-class wins)" do

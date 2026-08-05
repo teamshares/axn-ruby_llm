@@ -21,6 +21,13 @@ module Axn
     module ToolAdapter
       NOT_SET = Object.new.freeze
 
+      # Client-facing tool-error text when the transport step raises while turning a *successful*
+      # result into a response (see the guard in build_tool_class's #execute). Deliberately generic:
+      # the actionable detail (class, path) is a gem/tool bug, so it rides on the reported exception
+      # (on_exception / logs), not the tool's response — mirroring how axn keeps a failure's detail
+      # off the user-facing message, and axn-mcp's Serializer::ADAPTER_FAILURE_MESSAGE.
+      ADAPTER_FAILURE_MESSAGE = "The tool could not produce a valid response"
+
       class << self
         def wrap(axn_class, halt_after: nil, provider_params: nil, present_as: nil, render_as: NOT_SET, ambient_context: NOT_SET)
           validate_present_as_kwargs!(present_as, render_as)
@@ -92,23 +99,38 @@ module Axn
                 next({ error: result.error })
               end
 
-              # RubyLLM::Chat#handle_tool_calls only treats a Content/Content::Raw return as-is; any
-              # other object (including a plain Hash) gets `#to_s`'d before being sent to the provider
-              # -- which for a Hash produces Ruby's inspect syntax (`{"k"=>"v"}`), not JSON. Serialize
-              # structured payloads ourselves so the wire form is always valid JSON.
-              payload = if present_as == :message
-                          result.message
-                        else
-                          Axn::Extensions::Serialization.render(result, reject_opaque:).to_json
-                        end
-              halt_after ? halt(payload) : payload
-            rescue ::Axn::Extensions::Serialization::UnserializableValue, ::JSON::NestingError, ::JSON::GeneratorError => e
-              # render raises UnserializableValue for a value core can't render (two Hash keys
-              # colliding on one JSON property, a non-finite Float, non-UTF-8 bytes); `.to_json`
-              # raises a JSON nesting/generator error past the encoder's max_nesting (an encoder
-              # option core deliberately doesn't own). RubyLLM has no rescue around a tool's #execute,
-              # so either would escape and break the whole chat — surface it as a tool error instead.
-              { error: "Tool result could not be serialized: #{e.message}" }
+              # Uphold axn's non-bang "never raises" contract at the adapter boundary. The wrapped
+              # Axn's own `.call` (run via the Invoker above) never raises -- core catches action
+              # exceptions into a failed Result and pages on_exception itself -- but the TRANSPORT
+              # step that runs AFTER it (exposed-value serialization + JSON encoding) can raise
+              # outside core's executor: a value core can't render (two Hash keys colliding on one
+              # JSON property, a non-finite Float, non-UTF-8 bytes, an opaque value under
+              # reject_opaque), a structure past the JSON encoder's max_nesting, or a gem bug.
+              # RubyLLM has no rescue around a tool's #execute, so any of these would escape and
+              # break the whole chat. Scope the guard to JUST that mapping step (NOT the Invoker call,
+              # which already handles + reports its own exceptions -- double-guarding would
+              # double-report on_exception): report through axn's global on_exception for
+              # observability, then -- honoring core's best_effort_raises_in_dev so a real bug
+              # surfaces loudly rather than being masked -- re-raise in dev, otherwise return a tool
+              # error so #execute ALWAYS yields a value. Shaped to drop into the planned shared
+              # Axn::Tools::Serialization.guard (PRO-2996 §2b) with no behavior change.
+              begin
+                # RubyLLM::Chat#handle_tool_calls only treats a Content/Content::Raw return as-is; any
+                # other object (including a plain Hash) gets `#to_s`'d before being sent to the
+                # provider -- which for a Hash produces Ruby's inspect syntax (`{"k"=>"v"}`), not
+                # JSON. Serialize structured payloads ourselves so the wire form is always valid JSON.
+                payload = if present_as == :message
+                            result.message
+                          else
+                            Axn::Extensions::Serialization.render(result, reject_opaque:).to_json
+                          end
+                halt_after ? halt(payload) : payload
+              rescue StandardError => e
+                Axn.config.on_exception(e, action: axn_class, context: { source: "Axn::RubyLLM" })
+                raise if Axn::Extensions.raises_in_dev?
+
+                { error: ADAPTER_FAILURE_MESSAGE }
+              end
             end
           end
         end
