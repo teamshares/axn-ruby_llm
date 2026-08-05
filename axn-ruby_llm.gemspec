@@ -20,15 +20,15 @@ Gem::Specification.new do |spec|
   spec.metadata["changelog_uri"] = "#{spec.homepage}/blob/main/CHANGELOG.md"
   spec.metadata["rubygems_mfa_required"] = "true"
 
-  gemspec = File.basename(__FILE__)
-  spec.files = IO.popen(%w[git ls-files -z], chdir: __dir__, err: IO::NULL) do |ls|
-    ls.readlines("\x0", chomp: true).reject do |f|
-      (f == gemspec) ||
-        f.start_with?(*%w[bin/ spec/ .git .github Gemfile Gemfile.lock .rspec_status pkg/ tmp/ .rspec .rubocop])
-    end
-  end
+  # Allowlist, not denylist: enumerate exactly the shippable surface so nothing leaks into the
+  # packaged gem by default (dev/CI/agent files, lefthook, internal-docs, etc. are simply not listed).
+  spec.files = IO.popen(
+    %w[git ls-files -z --
+       lib README.md CHANGELOG.md LICENSE],
+    chdir: __dir__, err: IO::NULL,
+  ) { |ls| ls.readlines("\x0", chomp: true) }
   spec.require_paths = ["lib"]
 
-  spec.add_dependency "axn", ">= 0.1.0-alpha.4.3", "< 0.2.0"
+  spec.add_dependency "axn", ">= 0.1.0-alpha.5", "< 0.2.0"
   spec.add_dependency "ruby_llm", ">= 1.15", "< 2.0"
 end

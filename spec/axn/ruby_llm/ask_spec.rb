@@ -10,7 +10,7 @@ RSpec.describe Axn::RubyLLM::Ask do
   let(:llm_input_tokens) { 12 }
   let(:llm_output_tokens) { 34 }
   let(:llm_model_id) { "gpt-4o-mini" }
-  let(:llm_cost) { instance_double(RubyLLM::Cost, total: 0.00056) }
+  let(:llm_cost) { instance_double(RubyLLM::Cost, total: 0.00056, tokens?: true) }
   let(:llm_model_info) { instance_double("RubyLLM::Model") }
   let(:llm_response) do
     instance_double(
@@ -29,19 +29,25 @@ RSpec.describe Axn::RubyLLM::Ask do
     allow(RubyLLM).to receive(:chat).and_return(chat_instance)
     allow(chat_instance).to receive(:with_instructions).and_return(chat_instance)
     allow(chat_instance).to receive(:with_params).and_return(chat_instance)
+    allow(chat_instance).to receive(:with_tools).and_return(chat_instance)
     allow(chat_instance).to receive(:ask).with(prompt).and_return(llm_response)
+    allow(chat_instance).to receive(:messages).and_return([llm_response])
     allow(RubyLLM.models).to receive(:find).with(llm_model_id).and_return(llm_model_info)
     allow(llm_response).to receive(:cost).with(model: llm_model_info).and_return(llm_cost)
   end
 
   after do
-    Axn::RubyLLM.reset_configuration!
+    Axn::RubyLLM.reset_config!
   end
 
   context "with default params (json: false)" do
     it "returns raw text response" do
       expect(result).to be_ok
       expect(result.response).to eq("Here is the summary.")
+    end
+
+    it "sets a meaningful success message" do
+      expect(result.success).to eq("LLM request completed")
     end
 
     it "does not configure JSON response format" do
@@ -80,7 +86,7 @@ RSpec.describe Axn::RubyLLM::Ask do
 
   context "without a model override" do
     it "uses the configured default model" do
-      expect(RubyLLM).to receive(:chat).with(model: Axn::RubyLLM.configuration.default_model)
+      expect(RubyLLM).to receive(:chat).with(model: Axn::RubyLLM.config.default_model)
       result
     end
 
@@ -134,7 +140,7 @@ RSpec.describe Axn::RubyLLM::Ask do
 
       it "fails with a schema-specific error" do
         expect(result).not_to be_ok
-        expect(result.error).to include("Schema response was not valid JSON")
+        expect(result.error).to eq("LLM request failed: Schema response was not valid JSON")
       end
     end
 
@@ -153,6 +159,15 @@ RSpec.describe Axn::RubyLLM::Ask do
     end
   end
 
+  context "with a custom error_headline configured" do
+    before { Axn::RubyLLM.configure { |c| c.error_headline = "Something went wrong calling the LLM" } }
+
+    it "prefixes failures with the configured headline instead of the default" do
+      allow(chat_instance).to receive(:ask).and_raise(RubyLLM::UnauthorizedError.new("Invalid API key"))
+      expect(result.error).to eq("Something went wrong calling the LLM: Invalid API key")
+    end
+  end
+
   context "when the provider raises a rate limit error" do
     before do
       allow(chat_instance).to receive(:ask).and_raise(RubyLLM::RateLimitError.new("429 Too Many Requests"))
@@ -160,19 +175,84 @@ RSpec.describe Axn::RubyLLM::Ask do
 
     it "fails with a rate limit message" do
       expect(result).not_to be_ok
-      expect(result.error).to include("Rate limit reached")
-      expect(result.error).to include("429 Too Many Requests")
+      expect(result.error).to eq("LLM request failed: Rate limit reached: 429 Too Many Requests")
     end
   end
 
-  context "when a generic error occurs" do
+  context "when an unrecognized StandardError occurs (e.g. a bug)" do
     before do
-      allow(chat_instance).to receive(:ask).and_raise(StandardError.new("Network timeout"))
+      allow(chat_instance).to receive(:ask).and_raise(StandardError.new("undefined method 'foo' for nil"))
     end
 
-    it "fails with the error prefix" do
+    it "fails with the bare headline, without leaking the exception message" do
       expect(result).not_to be_ok
-      expect(result.error).to eq("LLM request failed: Network timeout")
+      expect(result.error).to eq("LLM request failed")
+    end
+  end
+
+  context "when RubyLLM raises one of its own error types" do
+    before do
+      allow(chat_instance).to receive(:ask).and_raise(RubyLLM::UnauthorizedError.new("Invalid API key - check your credentials"))
+    end
+
+    it "surfaces the provider's message" do
+      expect(result).not_to be_ok
+      expect(result.error).to eq("LLM request failed: Invalid API key - check your credentials")
+    end
+  end
+
+  context "when the underlying HTTP transport fails (e.g. a timeout)" do
+    before do
+      allow(chat_instance).to receive(:ask).and_raise(Faraday::TimeoutError.new("execution expired"))
+    end
+
+    it "surfaces the transport error's message" do
+      expect(result).not_to be_ok
+      expect(result.error).to eq("LLM request failed: execution expired")
+    end
+  end
+
+  context "when RubyLLM raises one of its non-HTTP error types" do
+    {
+      "RubyLLM::ConfigurationError" => [RubyLLM::ConfigurationError, "No API key configured for openai"],
+      "RubyLLM::ModelNotFoundError" => [RubyLLM::ModelNotFoundError, "Model gpt-99 not found"],
+    }.each do |name, (klass, message)|
+      context "with #{name}" do
+        before { allow(chat_instance).to receive(:ask).and_raise(klass.new(message)) }
+
+        it "surfaces the error's message rather than the bare headline" do
+          expect(result).not_to be_ok
+          expect(result.error).to eq("LLM request failed: #{message}")
+        end
+      end
+    end
+  end
+
+  context "when the provider is overloaded or temporarily unavailable" do
+    {
+      "RubyLLM::OverloadedError" => RubyLLM::OverloadedError,
+      "RubyLLM::ServiceUnavailableError" => RubyLLM::ServiceUnavailableError,
+      "RubyLLM::ServerError" => RubyLLM::ServerError,
+    }.each do |name, klass|
+      context "with #{name}" do
+        before { allow(chat_instance).to receive(:ask).and_raise(klass.new("please try again later")) }
+
+        it "fails with a retryable-specific message" do
+          expect(result).not_to be_ok
+          expect(result.error).to eq("LLM request failed: Provider temporarily unavailable, try again later: please try again later")
+        end
+      end
+    end
+  end
+
+  context "when the prompt exceeds the model's context window" do
+    before do
+      allow(chat_instance).to receive(:ask).and_raise(RubyLLM::ContextLengthExceededError.new("maximum context length is 8192 tokens"))
+    end
+
+    it "fails with an actionable, detail-preserving message" do
+      expect(result).not_to be_ok
+      expect(result.error).to eq("LLM request failed: Prompt exceeds the model's context window: maximum context length is 8192 tokens")
     end
   end
 
@@ -182,7 +262,7 @@ RSpec.describe Axn::RubyLLM::Ask do
 
     it "fails with the JSON parse error message" do
       expect(result).not_to be_ok
-      expect(result.error).to eq("Failed to parse JSON from LLM response")
+      expect(result.error).to eq("LLM request failed: Response was not valid JSON")
     end
   end
 
@@ -201,6 +281,32 @@ RSpec.describe Axn::RubyLLM::Ask do
 
     it "exposes the full Cost struct via cost_breakdown" do
       expect(result.cost_breakdown).to eq(llm_cost)
+    end
+
+    # chat.ask appends the user message before completing, so even a normal no-tool call leaves
+    # [user, assistant] on the chat (the unit stubs above use a single-element messages array, which
+    # hides this). The user message carries no tokens; it must not force cost_breakdown through
+    # aggregate -- which returns a Cost with nil tokens/model -- so the response's own Cost is kept.
+    context "on a real single-turn chat where messages == [user, assistant]" do
+      let(:user_message) do
+        instance_double(RubyLLM::Message, input_tokens: nil, output_tokens: nil,
+                                          cache_read_tokens: nil, cache_write_tokens: nil, model_id: nil)
+      end
+
+      before do
+        allow(user_message).to receive(:cost).with(model: llm_model_info).and_return(RubyLLM::Cost.new(tokens: nil))
+        allow(chat_instance).to receive(:messages).and_return([user_message, llm_response])
+      end
+
+      it "preserves the response's own Cost (not a detail-dropping aggregate)" do
+        expect(result.cost_breakdown).to equal(llm_cost)
+        expect(result.cost).to eq(0.00056)
+      end
+
+      it "still sums tokens across only the token-bearing messages" do
+        expect(result.input_tokens).to eq(12)
+        expect(result.output_tokens).to eq(34)
+      end
     end
 
     context "when the provider returns no token data" do
@@ -247,9 +353,9 @@ RSpec.describe Axn::RubyLLM::Ask do
         allow(RubyLLM.models).to receive(:find).with(llm_model_id).and_raise(StandardError.new("registry explosion"))
       end
 
-      it "propagates as an LLM request failure" do
+      it "propagates as an LLM request failure, without leaking the exception message" do
         expect(result).not_to be_ok
-        expect(result.error).to eq("LLM request failed: registry explosion")
+        expect(result.error).to eq("LLM request failed")
       end
     end
   end
@@ -288,6 +394,10 @@ RSpec.describe Axn::RubyLLM::Ask do
       it "returns a success result without touching RubyLLM" do
         expect(RubyLLM).not_to receive(:chat)
         expect(result).to be_ok
+      end
+
+      it "sets a success message explaining the stubbed values" do
+        expect(result.success).to eq("LLM request completed (using stubbed values - actual LLM request disabled)")
       end
 
       it "exposes a stub response and stubbed flag" do
@@ -345,6 +455,125 @@ RSpec.describe Axn::RubyLLM::Ask do
       end
     end
   end
+
+  describe "tools:" do
+    let(:widget) do
+      Class.new do
+        include Axn
+
+        description "creates a widget"
+        expects :name, type: String
+        def call; end
+      end
+    end
+
+    it "wraps a bare Axn class and registers it with the chat" do
+      registered = nil
+      allow(chat_instance).to receive(:with_tools) do |*tools|
+        registered = tools
+        chat_instance
+      end
+
+      described_class.call(prompt:, tools: [widget])
+
+      expect(registered).to all(be < RubyLLM::Tool)
+      expect(registered.map { |t| t.new.name }).to eq([widget.tool_name])
+    end
+
+    it "passes an already-wrapped tool through unchanged (e.g. one closed over ambient_context)" do
+      wrapped = Axn::RubyLLM.wrap(widget)
+      expect(chat_instance).to receive(:with_tools).with(wrapped).and_return(chat_instance)
+
+      described_class.call(prompt:, tools: [wrapped])
+    end
+
+    it "does not register tools when none are given" do
+      expect(chat_instance).not_to receive(:with_tools)
+
+      described_class.call(prompt:)
+    end
+  end
+
+  context "across a tool loop (multiple model round-trips in one ask)" do
+    let(:turn1) do
+      instance_double(RubyLLM::Message, content: "calling a tool", input_tokens: 100, output_tokens: 10,
+                                        cache_read_tokens: nil, cache_write_tokens: nil, model_id: llm_model_id)
+    end
+    let(:turn2) do
+      instance_double(RubyLLM::Message, content: "final answer", input_tokens: 50, output_tokens: 20,
+                                        cache_read_tokens: nil, cache_write_tokens: nil, model_id: llm_model_id)
+    end
+
+    before do
+      allow(turn1).to receive(:cost).with(model: llm_model_info)
+                                    .and_return(RubyLLM::Cost.new(amounts: { input: 0.001, output: 0.002 }, has_tokens: true, missing: []))
+      allow(turn2).to receive(:cost).with(model: llm_model_info)
+                                    .and_return(RubyLLM::Cost.new(amounts: { input: 0.0005, output: 0.001 }, has_tokens: true, missing: []))
+      # The chat accumulates both assistant turns; ask returns the final one.
+      allow(chat_instance).to receive(:messages).and_return([turn1, turn2])
+      allow(chat_instance).to receive(:ask).with(prompt).and_return(turn2)
+    end
+
+    it "sums token usage across every turn, not just the final one" do
+      expect(result.input_tokens).to eq(150)
+      expect(result.output_tokens).to eq(30)
+      expect(result.prompt_tokens).to eq(150)
+    end
+
+    it "sums cost across every turn" do
+      expect(result.cost).to be_within(1e-9).of(0.0045)
+      expect(result.cost_breakdown.total).to be_within(1e-9).of(0.0045)
+    end
+
+    it "still exposes the final turn as raw_message" do
+      expect(result.raw_message).to eq(turn2)
+    end
+  end
+
+  context "when a wrapped tool halts the loop (halt_after:)" do
+    # chat.ask returns a ::RubyLLM::Tool::Halt (tool payload as #content), NOT a Message — and a Halt
+    # has no #model_id, so reading model/cost data off it would raise NoMethodError and turn a
+    # successful halt into "LLM request failed". Model/cost must come from the last assistant turn.
+    let(:halt_payload) { { "greeting" => "hi" }.to_json }
+    let(:halt) { RubyLLM::Tool::Halt.new(halt_payload) }
+    let(:assistant_turn) do
+      instance_double(RubyLLM::Message, role: :assistant, content: "", input_tokens: 42, output_tokens: 7,
+                                        cache_read_tokens: nil, cache_write_tokens: nil, model_id: llm_model_id)
+    end
+
+    before do
+      allow(assistant_turn).to receive(:cost).with(model: llm_model_info)
+                                             .and_return(RubyLLM::Cost.new(amounts: { input: 0.001, output: 0.002 }, has_tokens: true, missing: []))
+      allow(chat_instance).to receive(:ask).with(prompt).and_return(halt)
+      allow(chat_instance).to receive(:messages).and_return([assistant_turn])
+    end
+
+    it "succeeds instead of crashing on the Halt's missing model_id" do
+      expect(result).to be_ok
+    end
+
+    it "exposes the halted tool payload as the response" do
+      expect(result.response).to eq(halt_payload)
+    end
+
+    it "derives model, tokens, and cost from the last assistant turn" do
+      expect(result.input_tokens).to eq(42)
+      expect(result.output_tokens).to eq(7)
+      expect(result.cost).to be_within(1e-9).of(0.003)
+    end
+
+    context "with schema: (the halt payload never went through with_schema)" do
+      let(:schema_class) { Class.new }
+      let(:params) { { prompt:, schema: schema_class } }
+
+      before { allow(chat_instance).to receive(:with_schema).with(schema_class).and_return(chat_instance) }
+
+      it "parses the halted JSON payload into a Hash instead of failing 'not valid JSON'" do
+        expect(result).to be_ok
+        expect(result.response).to eq("greeting" => "hi")
+      end
+    end
+  end
 end
 
 RSpec.describe "Axn::RubyLLM::Ask OTel attribute enrichment" do
@@ -386,14 +615,18 @@ RSpec.describe "Axn::RubyLLM::Ask OTel attribute enrichment" do
     allow(chat_instance).to receive(:with_params).and_return(chat_instance)
     allow(chat_instance).to receive(:with_schema).and_return(chat_instance)
     allow(chat_instance).to receive(:ask).and_return(llm_response)
+    allow(chat_instance).to receive(:messages).and_return([llm_response])
     allow(RubyLLM.models).to receive(:find).and_return(nil)
     allow(llm_response).to receive(:cost).and_return(nil)
-    allow(Axn::Internal::Tracing).to receive(:tracer).and_return(fake_axn_tracer)
+    Axn.config.tracer = fake_axn_tracer
     stub_const("OpenTelemetry::Trace", Module.new)
     allow(OpenTelemetry::Trace).to receive(:current_span).and_return(span)
   end
 
-  after { Axn::RubyLLM.reset_configuration! }
+  after do
+    Axn::RubyLLM.reset_config!
+    Axn.config.reset!(:tracer)
+  end
 
   it "sets gen_ai and cost attributes on the current span for a normal call" do
     Axn::RubyLLM.ask(prompt:)
@@ -406,7 +639,7 @@ RSpec.describe "Axn::RubyLLM::Ask OTel attribute enrichment" do
 
   it "sets cost attribute when cost is available" do
     model_info = instance_double("RubyLLM::Model")
-    cost_struct = instance_double(RubyLLM::Cost, total: 0.0007)
+    cost_struct = instance_double(RubyLLM::Cost, total: 0.0007, tokens?: true)
     allow(RubyLLM.models).to receive(:find).and_return(model_info)
     allow(llm_response).to receive(:cost).with(model: model_info).and_return(cost_struct)
     Axn::RubyLLM.ask(prompt:)

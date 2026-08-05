@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 RSpec.describe Axn::RubyLLM::RSpec::Helpers do
-  after { Axn::RubyLLM.reset_configuration! }
+  after { Axn::RubyLLM.reset_config! }
 
   describe "stub_axn_ruby_llm" do
     context "with a plain string response" do
@@ -89,6 +89,20 @@ RSpec.describe Axn::RubyLLM::RSpec::Helpers do
       it "returns the chat double for further assertions" do
         chat = stub_axn_ruby_llm(response: "ok")
         expect(chat).to be_an(RSpec::Mocks::InstanceVerifyingDouble)
+      end
+    end
+
+    context "with a positional response (no keyword)" do
+      before { stub_axn_ruby_llm("positional summary") }
+
+      it "is equivalent to response:" do
+        expect(Axn::RubyLLM.ask(prompt: "summarize").response).to eq("positional summary")
+      end
+    end
+
+    context "with neither positional nor keyword response" do
+      it "raises a clear ArgumentError" do
+        expect { stub_axn_ruby_llm }.to raise_error(ArgumentError, /requires a response/)
       end
     end
   end
