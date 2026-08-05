@@ -81,7 +81,9 @@ module Axn
           # Default to zero cost so specs exercise the "model found, cost computed" path.
           # Pass cost: explicitly to assert a specific value.
           cost_total = cost || 0.0
-          cost_struct = instance_double(::RubyLLM::Cost, total: cost_total)
+          # tokens?: true — the stubbed message is a billable assistant turn, and Ask's cost_breakdown
+          # keeps only token-bearing (tokens?) costs before its one?-vs-aggregate decision.
+          cost_struct = instance_double(::RubyLLM::Cost, total: cost_total, tokens?: true)
           allow(llm_message).to receive(:cost).with(model: model_info).and_return(cost_struct)
         end
       end

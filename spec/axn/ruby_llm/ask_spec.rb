@@ -10,7 +10,7 @@ RSpec.describe Axn::RubyLLM::Ask do
   let(:llm_input_tokens) { 12 }
   let(:llm_output_tokens) { 34 }
   let(:llm_model_id) { "gpt-4o-mini" }
-  let(:llm_cost) { instance_double(RubyLLM::Cost, total: 0.00056) }
+  let(:llm_cost) { instance_double(RubyLLM::Cost, total: 0.00056, tokens?: true) }
   let(:llm_model_info) { instance_double("RubyLLM::Model") }
   let(:llm_response) do
     instance_double(
@@ -281,6 +281,32 @@ RSpec.describe Axn::RubyLLM::Ask do
 
     it "exposes the full Cost struct via cost_breakdown" do
       expect(result.cost_breakdown).to eq(llm_cost)
+    end
+
+    # chat.ask appends the user message before completing, so even a normal no-tool call leaves
+    # [user, assistant] on the chat (the unit stubs above use a single-element messages array, which
+    # hides this). The user message carries no tokens; it must not force cost_breakdown through
+    # aggregate -- which returns a Cost with nil tokens/model -- so the response's own Cost is kept.
+    context "on a real single-turn chat where messages == [user, assistant]" do
+      let(:user_message) do
+        instance_double(RubyLLM::Message, input_tokens: nil, output_tokens: nil,
+                                          cache_read_tokens: nil, cache_write_tokens: nil, model_id: nil)
+      end
+
+      before do
+        allow(user_message).to receive(:cost).with(model: llm_model_info).and_return(RubyLLM::Cost.new(tokens: nil))
+        allow(chat_instance).to receive(:messages).and_return([user_message, llm_response])
+      end
+
+      it "preserves the response's own Cost (not a detail-dropping aggregate)" do
+        expect(result.cost_breakdown).to equal(llm_cost)
+        expect(result.cost).to eq(0.00056)
+      end
+
+      it "still sums tokens across only the token-bearing messages" do
+        expect(result.input_tokens).to eq(12)
+        expect(result.output_tokens).to eq(34)
+      end
     end
 
     context "when the provider returns no token data" do
@@ -613,7 +639,7 @@ RSpec.describe "Axn::RubyLLM::Ask OTel attribute enrichment" do
 
   it "sets cost attribute when cost is available" do
     model_info = instance_double("RubyLLM::Model")
-    cost_struct = instance_double(RubyLLM::Cost, total: 0.0007)
+    cost_struct = instance_double(RubyLLM::Cost, total: 0.0007, tokens?: true)
     allow(RubyLLM.models).to receive(:find).and_return(model_info)
     allow(llm_response).to receive(:cost).with(model: model_info).and_return(cost_struct)
     Axn::RubyLLM.ask(prompt:)

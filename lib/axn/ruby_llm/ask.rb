@@ -169,11 +169,18 @@ module Axn
       memo def cost_breakdown
         return nil unless model_info
 
-        costs = usage_messages.map { |message| message.cost(model: model_info) }
+        # chat.messages always includes the user prompt (chat.ask appends it before completing) and,
+        # in a tool loop, the tool-result messages -- none of which carry token usage. Keep only the
+        # token-bearing (billable) costs BEFORE the one?-vs-aggregate decision: a normal single-turn
+        # call then preserves the response's OWN Cost (with its tokens/model) via costs.one?, instead
+        # of being forced through aggregate -- which returns a Cost with nil tokens/model -- by the
+        # ever-present user message. `select(&:tokens?)` mirrors Cost.aggregate's own billable filter,
+        # so the multi-turn total is unchanged.
+        costs = usage_messages.map { |message| message.cost(model: model_info) }.select(&:tokens?)
         return nil if costs.empty?
 
-        # One turn → its own Cost (identical to a non-tool call). Multiple → RubyLLM::Cost.aggregate
-        # sums the per-tier costs into a single breakdown.
+        # One billable turn → its own Cost (identical to the pre-tool-loop non-tool call). Multiple →
+        # RubyLLM::Cost.aggregate sums the per-tier costs into a single breakdown.
         costs.one? ? costs.first : ::RubyLLM::Cost.aggregate(costs)
       end
 
