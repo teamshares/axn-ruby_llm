@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.2.0] - 2026-08-05
 
 > **Upgrade notes (behavior changes):**
 > - **`Ask` failure messages changed wording.** Code that pattern-matches on `result.error` strings may need updating: unrecognized exceptions no longer include the underlying exception message, and 5xx / context-length errors now have their own more specific text (see Changed below). `result.ok?`-based control flow is unaffected.
