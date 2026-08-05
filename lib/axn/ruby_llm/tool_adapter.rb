@@ -131,7 +131,15 @@ module Axn
                           end
                 halt_after ? halt(payload) : payload
               rescue StandardError => e
-                Axn.config.on_exception(e, action: axn_class, context: { source: "Axn::RubyLLM" })
+                # Report through on_exception for observability -- but the reporter is app-configured
+                # and CAN raise (a buggy hook, or one assuming `action` is a settled instance). Core
+                # normally invokes on_exception INSIDE its own best_effort; we call it directly, so a
+                # raising reporter would escape and defeat this guard's never-raises intent (aborting
+                # chat.ask in production). Wrap it in best_effort ourselves -- it swallows + warn-logs
+                # (and reraises in dev per best_effort_raises_in_dev), same as core.
+                Axn::Extensions.best_effort("reporting a tool serialization failure via on_exception") do
+                  Axn.config.on_exception(e, action: axn_class, context: { source: "Axn::RubyLLM" })
+                end
                 raise if Axn::Extensions.raises_in_dev?
 
                 { error: ADAPTER_FAILURE_MESSAGE }

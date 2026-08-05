@@ -319,6 +319,16 @@ RSpec.describe Axn::RubyLLM do
         expect(response).to eq(error: Axn::RubyLLM::ToolAdapter::ADAPTER_FAILURE_MESSAGE)
         expect(captured).to be_a(RuntimeError)
       end
+
+      it "still returns the tool error when the on_exception reporter itself raises (best-effort)" do
+        # The reporter is app-configured and can raise; core invokes it inside best_effort, we call it
+        # directly, so the guard must wrap it -- else a raising reporter escapes and aborts the chat.
+        allow(Axn.config).to receive(:on_exception).and_raise(RuntimeError, "reporter boom")
+
+        expect { described_class.wrap(dup_key_axn).new.execute }.not_to raise_error
+        expect(described_class.wrap(dup_key_axn).new.execute)
+          .to eq(error: Axn::RubyLLM::ToolAdapter::ADAPTER_FAILURE_MESSAGE)
+      end
     end
 
     describe "reject_opaque_exposed_values" do
