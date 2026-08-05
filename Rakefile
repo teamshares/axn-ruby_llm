@@ -10,4 +10,8 @@ RuboCop::RakeTask.new
 
 task default: %i[spec rubocop]
 
+# Gate `rake release` on the full test suite. bundler/gem_tasks' `release` depends on `build`, so
+# enhancing `build` with `default` (spec + rubocop) runs the checks before the gem is built and
+# pushed — a failing spec or RuboCop offense aborts the release before any push. Same mechanism as
+# axn core, which enhances `build` with its broader `verify` task.
 Rake::Task["build"].enhance([:default])
