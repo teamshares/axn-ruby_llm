@@ -535,6 +535,18 @@ RSpec.describe Axn::RubyLLM::Ask do
       expect(result.output_tokens).to eq(7)
       expect(result.cost).to be_within(1e-9).of(0.003)
     end
+
+    context "with schema: (the halt payload never went through with_schema)" do
+      let(:schema_class) { Class.new }
+      let(:params) { { prompt:, schema: schema_class } }
+
+      before { allow(chat_instance).to receive(:with_schema).with(schema_class).and_return(chat_instance) }
+
+      it "parses the halted JSON payload into a Hash instead of failing 'not valid JSON'" do
+        expect(result).to be_ok
+        expect(result.response).to eq("greeting" => "hi")
+      end
+    end
   end
 end
 

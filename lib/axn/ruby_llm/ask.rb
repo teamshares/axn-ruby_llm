@@ -120,6 +120,8 @@ module Axn
       end
 
       def parsed_response
+        return halted_response if halted?
+
         if schema
           # with_schema makes RubyLLM parse the response into a Hash on success
           return llm_response.content if llm_response.content.is_a?(Hash)
@@ -127,6 +129,19 @@ module Axn
           fail! "Schema response was not valid JSON"
         end
         json ? JSON.parse(llm_response.content) : llm_response.content
+      end
+
+      # A halted tool (halt_after:) short-circuits the model's final turn, so with_schema/json never
+      # parsed a model response — the "response" is the tool's own payload (Halt#content). For a
+      # :structured tool that's JSON text, so parse it to honor the Hash contract a schema:/json:
+      # caller expects; fall back to the raw string for a :message tool or an unparseable payload.
+      def halted_response
+        content = llm_response.content
+        return content unless (schema || json) && content.is_a?(String)
+
+        JSON.parse(content)
+      rescue JSON::ParserError
+        content
       end
 
       # A tool call makes multiple model round-trips inside one `ask`; every assistant turn is
@@ -178,10 +193,12 @@ module Axn
       # case; for a normal response, llm_response IS that final message. Token/cost SUMS already read
       # chat.messages, so only the model-id reads needed this indirection.
       def response_message
-        return llm_response unless llm_response.is_a?(::RubyLLM::Tool::Halt)
+        return llm_response unless halted?
 
         chat.messages.reverse.find { |message| message.role == :assistant }
       end
+
+      def halted? = llm_response.is_a?(::RubyLLM::Tool::Halt)
 
       memo def chat
         ::RubyLLM.chat(model: resolved_model).tap do |c|
