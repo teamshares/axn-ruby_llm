@@ -578,12 +578,6 @@ end
 
 RSpec.describe "Axn::RubyLLM::Ask OTel attribute enrichment" do
   let(:prompt) { "Summarize this." }
-  let(:span_context) { double("SpanContext", valid?: true) }
-  let(:span) do
-    double("Span", context: span_context).tap do |s|
-      allow(s).to receive(:set_attribute)
-    end
-  end
 
   let(:llm_response) do
     instance_double(RubyLLM::Message,
@@ -596,8 +590,8 @@ RSpec.describe "Axn::RubyLLM::Ask OTel attribute enrichment" do
   end
   let(:chat_instance) { instance_double(RubyLLM::Chat) }
 
-  # Stub axn's own OTel tracer so that stub_const("OpenTelemetry::Trace") doesn't
-  # cause axn's executor to call OpenTelemetry.tracer_provider on a bare module.
+  # The one span in play: axn's own tracer, which record_otel_attributes! reaches via
+  # Axn::Extensions::Tracing.annotate_span -- not a second, independently-stubbed OpenTelemetry double.
   let(:axn_span) do
     double("AxnSpan").tap do |s|
       allow(s).to receive(:set_attribute)
@@ -619,8 +613,6 @@ RSpec.describe "Axn::RubyLLM::Ask OTel attribute enrichment" do
     allow(RubyLLM.models).to receive(:find).and_return(nil)
     allow(llm_response).to receive(:cost).and_return(nil)
     Axn.config.tracer = fake_axn_tracer
-    stub_const("OpenTelemetry::Trace", Module.new)
-    allow(OpenTelemetry::Trace).to receive(:current_span).and_return(span)
   end
 
   after do
@@ -630,11 +622,11 @@ RSpec.describe "Axn::RubyLLM::Ask OTel attribute enrichment" do
 
   it "sets gen_ai and cost attributes on the current span for a normal call" do
     Axn::RubyLLM.ask(prompt:)
-    expect(span).to have_received(:set_attribute).with("gen_ai.request.model", "gpt-4o-mini")
-    expect(span).to have_received(:set_attribute).with("gen_ai.response.model", "gpt-4o-mini")
-    expect(span).to have_received(:set_attribute).with("gen_ai.usage.input_tokens", 10)
-    expect(span).to have_received(:set_attribute).with("gen_ai.usage.output_tokens", 5)
-    expect(span).to have_received(:set_attribute).with("axn.ruby_llm.stubbed", false)
+    expect(axn_span).to have_received(:set_attribute).with("gen_ai.request.model", "gpt-4o-mini")
+    expect(axn_span).to have_received(:set_attribute).with("gen_ai.response.model", "gpt-4o-mini")
+    expect(axn_span).to have_received(:set_attribute).with("gen_ai.usage.input_tokens", 10)
+    expect(axn_span).to have_received(:set_attribute).with("gen_ai.usage.output_tokens", 5)
+    expect(axn_span).to have_received(:set_attribute).with("axn.ruby_llm.stubbed", false)
   end
 
   it "sets cost attribute when cost is available" do
@@ -643,7 +635,7 @@ RSpec.describe "Axn::RubyLLM::Ask OTel attribute enrichment" do
     allow(RubyLLM.models).to receive(:find).and_return(model_info)
     allow(llm_response).to receive(:cost).with(model: model_info).and_return(cost_struct)
     Axn::RubyLLM.ask(prompt:)
-    expect(span).to have_received(:set_attribute).with("gen_ai.usage.cost", 0.0007)
+    expect(axn_span).to have_received(:set_attribute).with("gen_ai.usage.cost", 0.0007)
   end
 
   context "when disabled (stubbed path)" do
@@ -651,36 +643,27 @@ RSpec.describe "Axn::RubyLLM::Ask OTel attribute enrichment" do
 
     it "sets request model, zero tokens, zero cost, and stubbed=true; no response model" do
       Axn::RubyLLM.ask(prompt:)
-      expect(span).to have_received(:set_attribute).with("gen_ai.request.model", "gpt-4o-mini")
-      expect(span).to have_received(:set_attribute).with("gen_ai.usage.input_tokens", 0)
-      expect(span).to have_received(:set_attribute).with("gen_ai.usage.output_tokens", 0)
-      expect(span).to have_received(:set_attribute).with("gen_ai.usage.cost", 0.0)
-      expect(span).to have_received(:set_attribute).with("axn.ruby_llm.stubbed", true)
-      expect(span).not_to have_received(:set_attribute).with("gen_ai.response.model", anything)
+      expect(axn_span).to have_received(:set_attribute).with("gen_ai.request.model", "gpt-4o-mini")
+      expect(axn_span).to have_received(:set_attribute).with("gen_ai.usage.input_tokens", 0)
+      expect(axn_span).to have_received(:set_attribute).with("gen_ai.usage.output_tokens", 0)
+      expect(axn_span).to have_received(:set_attribute).with("gen_ai.usage.cost", 0.0)
+      expect(axn_span).to have_received(:set_attribute).with("axn.ruby_llm.stubbed", true)
+      expect(axn_span).not_to have_received(:set_attribute).with("gen_ai.response.model", anything)
     end
   end
 
-  context "when OTel is not loaded" do
-    before { hide_const("OpenTelemetry::Trace") }
+  context "when there is no active span (no tracer configured)" do
+    before { Axn.config.reset!(:tracer) }
 
     it "still succeeds and makes no attribute calls" do
       result = Axn::RubyLLM.ask(prompt:)
       expect(result).to be_ok
-      expect(span).not_to have_received(:set_attribute)
-    end
-  end
-
-  context "when there is no active span (context not valid)" do
-    let(:span_context) { double("SpanContext", valid?: false) }
-
-    it "still succeeds and makes no attribute calls" do
-      result = Axn::RubyLLM.ask(prompt:)
-      expect(result).to be_ok
+      expect(axn_span).not_to have_received(:set_attribute)
     end
   end
 
   context "when set_attribute raises" do
-    before { allow(span).to receive(:set_attribute).and_raise(StandardError, "span closed") }
+    before { allow(axn_span).to receive(:set_attribute).and_raise(StandardError, "span closed") }
 
     it "still succeeds" do
       expect(Axn::RubyLLM.ask(prompt:)).to be_ok
