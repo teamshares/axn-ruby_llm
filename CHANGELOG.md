@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **The transport-failure guard now logs an operator hint when `reject_opaque_exposed_values` may be the
+  cause.** The tool-facing error stays generic (`"The tool could not produce a valid response"`), but the
+  logged line now names the offending tool and both places the setting could be set
+  (`configure(:ruby_llm)` / `Axn::RubyLLM.config.reject_opaque_exposed_values`) whenever the resolved
+  value is `true` — matching `axn-openapi`'s dispatcher hint and `axn-mcp`'s guard. Previously an operator
+  had to guess which knob caused a rejection since the setting is per-tool overridable.
+
 ## [0.2.0] - 2026-08-05
 
 > **Upgrade notes (behavior changes):**

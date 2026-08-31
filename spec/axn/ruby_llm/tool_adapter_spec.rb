@@ -329,6 +329,44 @@ RSpec.describe Axn::RubyLLM do
         expect(described_class.wrap(dup_key_axn).new.execute)
           .to eq(error: Axn::RubyLLM::ToolAdapter::ADAPTER_FAILURE_MESSAGE)
       end
+
+      # The tool-facing error stays generic; this log line is an operator's only pointer to WHY. Mirrors
+      # axn-openapi's dispatcher hint spec / axn-mcp's Invocation guard spec: named because
+      # reject_opaque_exposed_values is overridable, so a hint naming only the gem-wide setter is a dead
+      # end whenever a per-tool override is what's in effect.
+      describe "the opaque-rejection log hint" do
+        def captured_log_for(axn_class)
+          io = StringIO.new
+          allow(Axn.config).to receive(:logger).and_return(Logger.new(io))
+          described_class.wrap(axn_class).new.execute
+          io.string
+        end
+
+        it "names the offending tool and BOTH config levels when reject_opaque_exposed_values is on" do
+          opaque_axn = Class.new do
+            include Axn
+
+            def self.name = "ToolAdapterSpec::Opaque"
+
+            configure(:ruby_llm) { |c| c.reject_opaque_exposed_values = true }
+            exposes :thing
+            def call = expose(thing: Object.new)
+          end
+
+          line = captured_log_for(opaque_axn)
+
+          expect(line).to include("ToolAdapterSpec::Opaque")
+          expect(line).to include("configure(:ruby_llm)")
+          expect(line).to include("Axn::RubyLLM.config.reject_opaque_exposed_values")
+        end
+
+        it "omits the hint when reject_opaque_exposed_values is off (the rejection can't be opaque-related)" do
+          line = captured_log_for(dup_key_axn)
+
+          expect(line).to include("UnserializableValue")
+          expect(line).not_to include("reject_opaque_exposed_values")
+        end
+      end
     end
 
     describe "reject_opaque_exposed_values" do
