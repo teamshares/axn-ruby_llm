@@ -150,18 +150,21 @@ module Axn
                 # way to ask which level supplied a resolved value. Non-committal ("if this is")
                 # because reject_opaque being on doesn't mean THIS failure is an opaque rejection --
                 # it could equally be a colliding key, a non-finite Float, or a gem bug.
-                # Built INSIDE the best_effort block, not before it: axn_class is caller code, and
-                # interpolating it (a hostile/buggy #to_s) must not raise outside the guard meant to
-                # contain exactly that. A separate best_effort from the on_exception report above,
-                # deliberately: a broken configured logger must not suppress the on_exception report
-                # (which already ran), and a broken on_exception reporter must not suppress this
-                # diagnostic line either -- each is the guard's only surviving signal when the OTHER one
-                # is what's broken.
+                # `resolved_axn_name` (axn core), not raw `#{axn_class}`: Class#to_s does NOT dispatch
+                # through an overridden `.name` (it renders the object-id form regardless), so a class
+                # with no assigned constant -- e.g. one built via Axn::Factory.build -- would otherwise
+                # show as `#<Class:0x...>` instead of naming the action. Built INSIDE the best_effort
+                # block, not before it: axn_class is caller code, so a hostile/buggy `resolved_axn_name`
+                # override must not raise outside the guard meant to contain exactly that. A separate
+                # best_effort from the on_exception report above, deliberately: a broken configured
+                # logger must not suppress the on_exception report (which already ran), and a broken
+                # on_exception reporter must not suppress this diagnostic line either -- each is the
+                # guard's only surviving signal when the OTHER one is what's broken.
                 Axn::Extensions.best_effort("logging a tool serialization failure hint") do
                   hint = if reject_opaque
                            " (if this is an opaque-value rejection: reject_opaque_exposed_values resolved true for " \
-                             "#{axn_class} — unset it on the action via `configure(:ruby_llm)`, or gem-wide via " \
-                             "`Axn::RubyLLM.config.reject_opaque_exposed_values = false`, whichever is set)"
+                             "#{axn_class.resolved_axn_name} — unset it on the action via `configure(:ruby_llm)`, " \
+                             "or gem-wide via `Axn::RubyLLM.config.reject_opaque_exposed_values = false`, whichever is set)"
                          else
                            ""
                          end

@@ -342,6 +342,11 @@ RSpec.describe Axn::RubyLLM do
           io.string
         end
 
+        # Asserts against the specific ERROR line the guard writes, not the whole captured buffer: the
+        # class also emits its own auto-log INFO lines (which correctly resolve a `.name` override
+        # through `resolved_axn_name`), and asserting against the full buffer would pass even if the
+        # hint itself renders the class as `#<Class:0x...>` -- exactly the interpolation bug this guards
+        # against (Class#to_s does not dispatch through an overridden `.name`).
         it "names the offending tool and BOTH config levels when reject_opaque_exposed_values is on" do
           opaque_axn = Class.new do
             include Axn
@@ -354,10 +359,11 @@ RSpec.describe Axn::RubyLLM do
           end
 
           line = captured_log_for(opaque_axn)
+          hint_line = line.lines.find { |l| l.include?("[axn-ruby_llm] failed to serialize") }
 
-          expect(line).to include("ToolAdapterSpec::Opaque")
-          expect(line).to include("configure(:ruby_llm)")
-          expect(line).to include("Axn::RubyLLM.config.reject_opaque_exposed_values")
+          expect(hint_line).to include("ToolAdapterSpec::Opaque")
+          expect(hint_line).to include("configure(:ruby_llm)")
+          expect(hint_line).to include("Axn::RubyLLM.config.reject_opaque_exposed_values")
         end
 
         it "omits the hint when reject_opaque_exposed_values is off (the rejection can't be opaque-related)" do
