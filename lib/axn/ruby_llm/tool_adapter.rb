@@ -232,6 +232,8 @@ module Axn
             # The JSON clause goes LAST: it ends in a brace rather than a period, so anything appended
             # after it would read as a run-on (and a period placed right after `}` risks being read as
             # part of the JSON itself).
+            return rebuilt unless object_node?(node)
+
             sentences = [map_sentence(node), entry_count_sentence(node), value_schema_clause(node)].compact
             return rebuilt if sentences.empty?
 
@@ -276,6 +278,18 @@ module Axn
           "Each value must match this JSON Schema: #{JSON.generate(values)}"
         end
 
+        # The recursion above walks every Hash in the schema, but not every Hash IS a schema node --
+        # `properties` is a name-to-schema map, so an Axn with a field named `additionalProperties` or
+        # `minProperties` puts a Hash (or an Integer) at exactly the key this pass reads. Without this
+        # gate, such a container was itself annotated, injecting a `description` key into `properties`
+        # and thereby advertising a phantom parameter named "description" -- which the model might then
+        # send and the Invoker would reject as undeclared. Requiring a declared object type also keeps
+        # object prose off a string/array node that carries these keys for any other reason.
+        def object_node?(node)
+          type = node[:type]
+          type == "object" || (type.is_a?(Array) && type.include?("object"))
+        end
+
         # A map's value schema, or nil if this node isn't a map. axn omits `additionalProperties`
         # entirely rather than emitting an empty one, and never emits the boolean form.
         def map_values(node)
@@ -316,7 +330,9 @@ module Axn
         def entry_count_sentence(node)
           min = node[:minProperties]
           max = node[:maxProperties]
-          min = nil unless min.is_a?(Integer)
+          # A zero minimum admits the empty object, i.e. constrains nothing -- reporting it as
+          # "must not be empty" below would state the opposite of what the schema allows.
+          min = nil unless min.is_a?(Integer) && min.positive?
           max = nil unless max.is_a?(Integer)
           return nil unless min || max
 

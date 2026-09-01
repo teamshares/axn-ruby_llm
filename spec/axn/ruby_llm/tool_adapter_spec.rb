@@ -272,6 +272,70 @@ RSpec.describe Axn::RubyLLM do
         expect(props["untyped"]["description"]).to eq("This object must not be empty.")
       end
 
+      it "annotates only object schema nodes, not the properties container that holds them" do
+        # The recursion walks every Hash in the schema, but `properties` is a name-to-schema MAP, not a
+        # schema node. An Axn with a field named `additionalProperties` puts a Hash at that key of the
+        # container, which read as a map declaration and injected a `description` key into the
+        # container itself -- i.e. advertised a phantom parameter named "description" to the model,
+        # which the Invoker would then reject as undeclared. Gate on the node really being an object.
+        collides = Class.new do
+          include Axn
+
+          expects :additionalProperties, type: Hash, of: { keys: String, values: Integer }
+          def call; end
+        end
+
+        props = props_for(collides)
+        expect(props.keys).to eq(["additionalProperties"])
+        expect(props["additionalProperties"]["description"]).to eq(
+          "An object mapping arbitrary keys to integer values. This object must not be empty.",
+        )
+      end
+
+      it "leaves a non-object node alone even if it carries object-only keys" do
+        # Same guard from the other side: prose about objects must never land on a string/array node.
+        annotated = described_class::ToolAdapter.send(
+          :annotate_object_constraints,
+          { type: "array", additionalProperties: { type: "integer" }, minProperties: 2 },
+        )
+
+        expect(annotated).not_to have_key(:description)
+      end
+
+      it "still annotates a nullable map, whose type is an array containing object" do
+        mapped = Class.new do
+          include Axn
+
+          expects :scores, type: Hash, of: { keys: String, values: Integer }, allow_blank: true
+          def call; end
+        end
+
+        expect(props_for(mapped)["scores"]["description"]).to eq(
+          "An object mapping arbitrary keys to integer values.",
+        )
+      end
+
+      it "treats minProperties: 0 as no minimum at all" do
+        # `minProperties: 0` admits the empty object, so "must not be empty" would be a flat lie.
+        # axn doesn't emit the explicit zero today (it omits the key instead), but the sentence
+        # builder shouldn't depend on that.
+        annotated = described_class::ToolAdapter.send(
+          :annotate_object_constraints,
+          { type: "object", minProperties: 0 },
+        )
+
+        expect(annotated).not_to have_key(:description)
+      end
+
+      it "reads a zero minimum alongside a maximum as a plain upper bound" do
+        annotated = described_class::ToolAdapter.send(
+          :annotate_object_constraints,
+          { type: "object", minProperties: 0, maxProperties: 5 },
+        )
+
+        expect(annotated[:description]).to eq("This object must have at most 5 entries.")
+      end
+
       it "leaves objects with nothing unconveyed untouched" do
         plain = Class.new do
           include Axn
