@@ -12,6 +12,15 @@
 
 ### Fixed
 
+- **A map's `additionalProperties` (and a Hash's `minProperties`/`maxProperties`) are no longer silently
+  lost at Gemini.** RubyLLM's Gemini converter rebuilds each property from a fixed whitelist that omits all
+  three, so `expects :scores, type: Hash, of: { keys: String, values: Integer }` reached the model as an empty
+  `{type: OBJECT}` — with no error raised, leaving the model to guess the value type and the call to be rejected
+  at runtime instead (PRO-3172). The adapter now restates these constraints as prose in the same node's
+  `description`, which Gemini does forward, appending after any `description:` you supplied; a structured value
+  type carries its compact JSON Schema too. The enforceable keys are still advertised unchanged, so OpenAI and
+  Anthropic are unaffected apart from the redundant sentence.
+
 - **The transport-failure guard now logs an operator hint when `reject_opaque_exposed_values` may be the
   cause.** The tool-facing error stays generic (`"The tool could not produce a valid response"`), but the
   logged line now names the offending tool and both places the setting could be set

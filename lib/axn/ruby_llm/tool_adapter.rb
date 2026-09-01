@@ -75,7 +75,7 @@ module Axn
           # match. Absent an override it's identical to the zero-arg name (Axn::MCP.wrap passes `:mcp`
           # the same way -- the author-once point).
           tool_name = axn_class.tool_name(:ruby_llm)
-          input_schema = normalize_nullable_types(axn_class.input_schema)
+          input_schema = normalize_nullable_types(annotate_object_constraints(axn_class.input_schema))
 
           Class.new(::RubyLLM::Tool) do
             description(axn_class.description) if axn_class.description
@@ -202,6 +202,136 @@ module Axn
           else
             node
           end
+        end
+
+        # PRO-3172. RubyLLM's Gemini converter rebuilds every property from a fixed whitelist
+        # (`convert_property`: description/enum/format/nullable/maximum/minimum/multipleOf, plus
+        # properties/required and, for an array, items/minItems/maxItems). Three keys axn emits for a
+        # Hash fall outside it: `additionalProperties` -- a map's value contract, from
+        # `of: { keys:, values: }` -- and `minProperties`/`maxProperties`, its entry-count bounds.
+        # All three are dropped with no error raised, so a map reaches Gemini as a bare
+        # `{type: OBJECT, properties: {}}`: the model never learns what the values must be, sends
+        # whatever it likes, and the Invoker rejects the call. The constraint degrades from
+        # schema-enforced to runtime-rejected, costing a wasted round trip plus a recovery the model
+        # has to work out for itself.
+        #
+        # Gemini's Schema proto has no equivalent to translate any of them to -- but `description` IS
+        # copied through, so restate them as prose there. Applied unconditionally rather than only for
+        # Gemini: the adapter has no provider to branch on (a wrapped tool class outlives the choice
+        # of chat), and on OpenAI/Anthropic -- which take `params_schema` verbatim and so still get
+        # the enforceable keys themselves -- the extra sentence is merely redundant, never wrong.
+        #
+        # Same non-mutation rule as normalize_nullable_types, for the same reason: axn may hand back
+        # a memoized input_schema, so build new Hashes/Arrays throughout.
+        def annotate_object_constraints(node)
+          case node
+          when Hash
+            rebuilt = node.to_h { |key, value| [key, annotate_object_constraints(value)] }
+            # Read the sentences off the ORIGINAL node, not `rebuilt`: map_sentence may dump the value
+            # subschema as JSON, and the original is the copy that has no generated prose in it yet.
+            # The JSON clause goes LAST: it ends in a brace rather than a period, so anything appended
+            # after it would read as a run-on (and a period placed right after `}` risks being read as
+            # part of the JSON itself).
+            sentences = [map_sentence(node), entry_count_sentence(node), value_schema_clause(node)].compact
+            return rebuilt if sentences.empty?
+
+            # merge (rather than assignment into a fresh Hash) so an author-supplied description keeps
+            # its original position in the node; the generated sentences follow the author's text.
+            rebuilt.merge(description: [node[:description], *sentences].compact.join(" "))
+          when Array
+            node.map { |value| annotate_object_constraints(value) }
+          else
+            node
+          end
+        end
+
+        # A map's value contract as prose. A bare type reads as a plain word -- "integer", "string or
+        # integer" -- which says everything the schema does; anything structured is named by its
+        # top-level type here and spelled out exactly by value_schema_clause below.
+        def map_sentence(node)
+          values = map_values(node)
+          return nil unless values
+
+          # `additionalProperties` governs only the keys `properties` does NOT match, so a map that
+          # also declares a `shape:` carries both on one node -- and Gemini keeps `properties`, which
+          # makes "arbitrary keys" actively wrong in that case.
+          lead = if node[:properties].is_a?(Hash) && node[:properties].any?
+                   "Keys other than those listed map to"
+                 else
+                   "An object mapping arbitrary keys to"
+                 end
+
+          phrase = bare_type_phrase(values)
+          phrase ? "#{lead} #{phrase} values." : "#{lead} values."
+        end
+
+        # A structured value type -- an array's `items`, a nested map, a constrained scalar -- would
+        # need hand-written English grammar to render as prose, which degrades fast with nesting
+        # depth, so carry it as compact JSON Schema instead: exact at any depth, and a form models
+        # read natively. Skipped when the type word alone already said everything.
+        def value_schema_clause(node)
+          values = map_values(node)
+          return nil if values.nil? || bare_type?(values)
+
+          "Each value must match this JSON Schema: #{JSON.generate(values)}"
+        end
+
+        # A map's value schema, or nil if this node isn't a map. axn omits `additionalProperties`
+        # entirely rather than emitting an empty one, and never emits the boolean form.
+        def map_values(node)
+          values = node[:additionalProperties]
+          values if values.is_a?(Hash) && values.any?
+        end
+
+        # True when a schema constrains nothing beyond the type itself -- exactly the case a type word
+        # conveys in full, with no JSON clause needed.
+        def bare_type?(schema)
+          case schema.keys
+          when [:type] then true
+          when [:anyOf] then schema[:anyOf].all? { |entry| entry.is_a?(Hash) && entry.keys == [:type] }
+          else false
+          end
+        end
+
+        # "integer"; "integer or null" (axn's array-valued nullable type -- annotation runs BEFORE
+        # normalize_nullable_types rewrites it to anyOf); "string or integer" (a union's anyOf). nil
+        # when no type is declared at all, which sends the caller to the JSON-only phrasing.
+        def bare_type_phrase(schema)
+          types = if schema[:type].is_a?(String)
+                    [schema[:type]]
+                  elsif schema[:type].is_a?(Array)
+                    schema[:type]
+                  elsif schema[:anyOf].is_a?(Array)
+                    schema[:anyOf].filter_map { |entry| entry[:type] if entry.is_a?(Hash) }
+                  end
+
+          return nil unless types.is_a?(Array) && types.any? && types.all?(String)
+
+          types.uniq.join(" or ")
+        end
+
+        # minProperties/maxProperties. Gemini forwards an ARRAY's minItems/maxItems but has no OBJECT
+        # equivalent, so an entry-count bound is lost whether or not the node is also a map -- a plain
+        # `expects :meta, type: Hash` already reflects `minProperties: 1` from axn's non-blank default.
+        def entry_count_sentence(node)
+          min = node[:minProperties]
+          max = node[:maxProperties]
+          min = nil unless min.is_a?(Integer)
+          max = nil unless max.is_a?(Integer)
+          return nil unless min || max
+
+          bound = if min && max && min == max then "exactly #{entry_count(min)}"
+                  elsif min && max then "between #{min} and #{entry_count(max)}"
+                  elsif max then "at most #{entry_count(max)}"
+                  elsif min > 1 then "at least #{entry_count(min)}"
+                  end
+
+          # A bare `minProperties: 1` is just non-emptiness, and reads far better said that way.
+          bound ? "This object must have #{bound}." : "This object must not be empty."
+        end
+
+        def entry_count(count)
+          "#{count} #{count == 1 ? "entry" : "entries"}"
         end
       end
     end
