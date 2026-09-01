@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **`record_otel_attributes!` now uses `Axn::Extensions::Tracing.annotate_span`** instead of the
+  unreliable ambient `OpenTelemetry::Trace.current_span` lookup, which could disagree with the span
+  axn's own tracer actually opened (PRO-3278) and silently drop every `gen_ai.*` attribute. Requires
+  axn `>= 0.1.0-alpha.5.2` (not yet released; temporarily pinned to axn's `main` branch in the
+  Gemfile — see PRO-3282).
+
 ### Fixed
 
 - **The transport-failure guard now logs an operator hint when `reject_opaque_exposed_values` may be the
