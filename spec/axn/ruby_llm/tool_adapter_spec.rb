@@ -101,6 +101,288 @@ RSpec.describe Axn::RubyLLM do
       end
     end
 
+    # PRO-3172. A map (`type: Hash, of: { keys:, values: }`) reflects to `additionalProperties`, and a
+    # Hash's entry-count bounds reflect to `minProperties`/`maxProperties`. RubyLLM's Gemini converter
+    # rebuilds every property from a fixed whitelist (`convert_property`: description, enum, format,
+    # nullable, maximum, minimum, multipleOf, plus properties/required/items) -- none of those three
+    # keys is on it, so a map arrives at Gemini as a bare `{type: OBJECT, properties: {}}` with no
+    # error raised. The model never learns what the values must be, sends whatever it likes, and the
+    # adapter's runtime validator rejects the call: the constraint degrades from schema-enforced to
+    # runtime-rejected, costing a round trip. Gemini's Schema proto has no equivalent to translate
+    # these to, but `description` IS copied through, so the adapter restates them as prose there.
+    describe "object constraints Gemini's converter can't carry" do
+      def props_for(axn_class)
+        described_class.wrap(axn_class).new.params_schema["properties"]
+      end
+
+      it "restates a scalar map's value type as prose in the node's description" do
+        mapped = Class.new do
+          include Axn
+
+          expects :scores, type: Hash, of: { keys: String, values: Integer }
+          def call; end
+        end
+
+        expect(props_for(mapped)["scores"]["description"]).to eq(
+          "An object mapping arbitrary keys to integer values. This object must not be empty.",
+        )
+      end
+
+      it "keeps the real additionalProperties alongside the prose, for providers that honor it" do
+        # The prose is additive: OpenAI/Anthropic take params_schema verbatim, so they still get the
+        # enforceable constraint. Only Gemini falls back to reading the sentence.
+        mapped = Class.new do
+          include Axn
+
+          expects :scores, type: Hash, of: { keys: String, values: Integer }
+          def call; end
+        end
+
+        expect(props_for(mapped)["scores"]["additionalProperties"]).to eq("type" => "integer")
+      end
+
+      it "names each branch of a union-valued map" do
+        mapped = Class.new do
+          include Axn
+
+          expects :mixed, type: Hash, of: { keys: String, values: [String, Integer] }
+          def call; end
+        end
+
+        expect(props_for(mapped)["mixed"]["description"]).to start_with(
+          "An object mapping arbitrary keys to string or integer values.",
+        )
+      end
+
+      it "names null as a branch when the map's values are nullable" do
+        # Annotation runs BEFORE normalize_nullable_types, so it reads axn's array-valued
+        # `type: ["integer", "null"]` here; the wire form is rewritten to anyOf afterwards.
+        mapped = Class.new do
+          include Axn
+
+          expects :scores, type: Hash, of: { keys: String, values: { klass: Integer, allow_nil: true } }
+          def call; end
+        end
+
+        expect(props_for(mapped)["scores"]["description"]).to start_with(
+          "An object mapping arbitrary keys to integer or null values.",
+        )
+      end
+
+      it "carries a structured value type as compact JSON Schema, since prose would lose the detail" do
+        mapped = Class.new do
+          include Axn
+
+          expects :tags, type: Hash, of: { keys: String, values: { klass: Array, of: String } }
+          def call; end
+        end
+
+        # The JSON clause lands last -- it ends in a brace, so a sentence appended after it would
+        # read as a run-on.
+        expect(props_for(mapped)["tags"]["description"]).to eq(
+          "An object mapping arbitrary keys to array values. This object must not be empty. " \
+          'Each value must match this JSON Schema: {"type":"array","items":{"type":"string"}}',
+        )
+      end
+
+      it "dumps a nested map's JSON Schema without the generated prose recursing into it" do
+        # The inner node gets annotated too (OpenAI/Anthropic see it), but the JSON clause is built
+        # from the PRE-annotation subtree so the dump stays a clean schema rather than nesting
+        # sentences inside sentences.
+        mapped = Class.new do
+          include Axn
+
+          expects :nested, type: Hash, of: { keys: String, values: { klass: Hash, of: { keys: String, values: Integer } } }
+          def call; end
+        end
+
+        description = props_for(mapped)["nested"]["description"]
+        expect(description).to include(
+          'Each value must match this JSON Schema: {"type":"object","additionalProperties":{"type":"integer"}}',
+        )
+        expect(description).not_to include("An object mapping arbitrary keys to integer values")
+      end
+
+      it "annotates a map nested inside another map's values" do
+        mapped = Class.new do
+          include Axn
+
+          expects :nested, type: Hash, of: { keys: String, values: { klass: Hash, of: { keys: String, values: Integer } } }
+          def call; end
+        end
+
+        inner = props_for(mapped)["nested"]["additionalProperties"]
+        expect(inner["description"]).to eq("An object mapping arbitrary keys to integer values.")
+      end
+
+      it "distinguishes the extra keys from the declared ones when a map also declares a shape" do
+        # `properties` and `additionalProperties` can sit on one node (map + shape:). Gemini KEEPS
+        # `properties`, so "arbitrary keys" would be wrong -- additionalProperties governs only the
+        # keys `properties` does not match.
+        member = Struct.new(:field, :validations)
+        combo = Class.new do
+          include Axn
+
+          expects :combo,
+                  type: Hash,
+                  of: { keys: String, values: Integer },
+                  shape: { members: [member.new(:a, { type: String })] }
+          def call; end
+        end
+
+        expect(props_for(combo)["combo"]["description"]).to start_with(
+          "Keys other than those listed map to integer values.",
+        )
+      end
+
+      it "preserves an author-supplied description, appending the generated sentences after it" do
+        mapped = Class.new do
+          include Axn
+
+          expects :scores, type: Hash, of: { keys: String, values: Integer }, description: "Score by player."
+          def call; end
+        end
+
+        expect(props_for(mapped)["scores"]["description"]).to eq(
+          "Score by player. An object mapping arbitrary keys to integer values. This object must not be empty.",
+        )
+      end
+
+      it "restates entry-count bounds, which Gemini drops for objects even without a map" do
+        # copy_tool_attributes forwards minItems/maxItems for ARRAY only -- an OBJECT's
+        # minProperties/maxProperties are dropped whether or not additionalProperties is present.
+        bounded = Class.new do
+          include Axn
+
+          expects :exact, type: Hash, of: { keys: String, values: Integer }, length: { minimum: 3, maximum: 3 }
+          expects :ranged, type: Hash, of: { keys: String, values: Integer }, length: { minimum: 2, maximum: 5 }
+          expects :at_least, type: Hash, of: { keys: String, values: Integer }, length: { minimum: 2 }
+          # allow_blank drops axn's default minProperties: 1, which is what leaves a maximum standing
+          # alone -- a plain `length: { maximum: 1 }` reflects min AND max of 1, i.e. "exactly".
+          expects :at_most, type: Hash, of: { keys: String, values: Integer }, length: { maximum: 1 }, allow_blank: true
+          expects :untyped, type: Hash
+          def call; end
+        end
+
+        props = props_for(bounded)
+        expect(props["exact"]["description"]).to end_with("This object must have exactly 3 entries.")
+        expect(props["ranged"]["description"]).to end_with("This object must have between 2 and 5 entries.")
+        expect(props["at_least"]["description"]).to end_with("This object must have at least 2 entries.")
+        expect(props["at_most"]["description"]).to end_with("This object must have at most 1 entry.")
+        expect(props["untyped"]["description"]).to eq("This object must not be empty.")
+      end
+
+      it "annotates only object schema nodes, not the properties container that holds them" do
+        # The recursion walks every Hash in the schema, but `properties` is a name-to-schema MAP, not a
+        # schema node. An Axn with a field named `additionalProperties` puts a Hash at that key of the
+        # container, which read as a map declaration and injected a `description` key into the
+        # container itself -- i.e. advertised a phantom parameter named "description" to the model,
+        # which the Invoker would then reject as undeclared. Gate on the node really being an object.
+        collides = Class.new do
+          include Axn
+
+          expects :additionalProperties, type: Hash, of: { keys: String, values: Integer }
+          def call; end
+        end
+
+        props = props_for(collides)
+        expect(props.keys).to eq(["additionalProperties"])
+        expect(props["additionalProperties"]["description"]).to eq(
+          "An object mapping arbitrary keys to integer values. This object must not be empty.",
+        )
+      end
+
+      it "leaves a non-object node alone even if it carries object-only keys" do
+        # Same guard from the other side: prose about objects must never land on a string/array node.
+        annotated = described_class::ToolAdapter.send(
+          :annotate_object_constraints,
+          { type: "array", additionalProperties: { type: "integer" }, minProperties: 2 },
+        )
+
+        expect(annotated).not_to have_key(:description)
+      end
+
+      it "still annotates a nullable map, whose type is an array containing object" do
+        mapped = Class.new do
+          include Axn
+
+          expects :scores, type: Hash, of: { keys: String, values: Integer }, allow_blank: true
+          def call; end
+        end
+
+        expect(props_for(mapped)["scores"]["description"]).to eq(
+          "An object mapping arbitrary keys to integer values.",
+        )
+      end
+
+      it "treats minProperties: 0 as no minimum at all" do
+        # `minProperties: 0` admits the empty object, so "must not be empty" would be a flat lie.
+        # axn doesn't emit the explicit zero today (it omits the key instead), but the sentence
+        # builder shouldn't depend on that.
+        annotated = described_class::ToolAdapter.send(
+          :annotate_object_constraints,
+          { type: "object", minProperties: 0 },
+        )
+
+        expect(annotated).not_to have_key(:description)
+      end
+
+      it "reads a zero minimum alongside a maximum as a plain upper bound" do
+        annotated = described_class::ToolAdapter.send(
+          :annotate_object_constraints,
+          { type: "object", minProperties: 0, maxProperties: 5 },
+        )
+
+        expect(annotated[:description]).to eq("This object must have at most 5 entries.")
+      end
+
+      it "leaves objects with nothing unconveyed untouched" do
+        plain = Class.new do
+          include Axn
+
+          expects :name, type: String
+          expects :count, type: Integer
+          def call; end
+        end
+
+        expect(props_for(plain)["name"]).not_to have_key("description")
+        expect(props_for(plain)["count"]).not_to have_key("description")
+      end
+
+      it "does not mutate the axn's (possibly memoized) input_schema" do
+        mapped = Class.new do
+          include Axn
+
+          expects :scores, type: Hash, of: { keys: String, values: Integer }
+          def call; end
+        end
+
+        before = Marshal.load(Marshal.dump(mapped.input_schema))
+        described_class.wrap(mapped)
+        expect(mapped.input_schema).to eq(before)
+      end
+
+      it "survives RubyLLM's Gemini converter, which is the whole point" do
+        # End-to-end against the real converter: additionalProperties and minProperties are gone by
+        # the time Gemini sees the schema, but the description carries the constraint through.
+        mapped = Class.new do
+          include Axn
+
+          expects :scores, type: Hash, of: { keys: String, values: Integer }
+          def call; end
+        end
+
+        converter = Object.new.extend(RubyLLM::Providers::Gemini::Tools)
+        converted = converter.send(:convert_tool_schema_to_gemini, described_class.wrap(mapped).new.params_schema)
+        scores = converted[:properties]["scores"]
+
+        expect(scores).not_to have_key(:additionalProperties)
+        expect(scores[:description]).to eq(
+          "An object mapping arbitrary keys to integer values. This object must not be empty.",
+        )
+      end
+    end
+
     describe "tool naming" do
       it "derives a clean, word-boundary-preserving name from a namespaced class via core tool_name" do
         namespaced = Class.new do
