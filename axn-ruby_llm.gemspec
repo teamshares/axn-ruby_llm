@@ -29,10 +29,14 @@ Gem::Specification.new do |spec|
   ) { |ls| ls.readlines("\x0", chomp: true) }
   spec.require_paths = ["lib"]
 
-  # PRO-3282: floor should read ">= 0.1.0-alpha.5.2" (the release with `Tracing.annotate_span`,
-  # PRO-3278) once axn cuts it -- its main branch has the code but hasn't bumped VERSION past
-  # alpha.5.1 yet, and the Gemfile's git pin resolves against that. Tighten this alongside dropping
-  # the Gemfile override.
+  # PRO-2996: floor should read ">= 0.1.0-alpha.6" -- the release carrying both
+  # `Axn::Tools::AdapterSerialization` (this gem now requires it: `tool_roots_default`,
+  # `declare_reject_opaque_exposed_values!`, `serialize_exposed`, `guard_tool_response`) and
+  # `Axn::Extensions::Tracing.annotate_span` (PRO-3278, the earlier PRO-3282 note's alpha.5.2 that
+  # was never cut). Both are on axn's main branch, which still reports VERSION alpha.5.1, so the
+  # floor CANNOT be raised yet: the Gemfile's git pin resolves to alpha.5.1 and a ">= alpha.6" floor
+  # makes the bundle unsatisfiable. Tighten this alongside dropping the Gemfile override, before
+  # cutting the next axn-ruby_llm release.
   spec.add_dependency "axn", ">= 0.1.0-alpha.5.1", "< 0.2.0"
   spec.add_dependency "ruby_llm", ">= 1.15", "< 2.0"
 end

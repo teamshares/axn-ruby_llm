@@ -693,6 +693,21 @@ RSpec.describe Axn::RubyLLM do
         expect(payload).to be_a(String)
         expect(JSON.parse(payload)["obj"]).to include("OpaqueValue")
       end
+
+      # PRO-2996: resolution moved from WRAP time to PER CALL when the render step moved to
+      # `Axn::RubyLLM.serialize_exposed` (which derives the class from the result and resolves on each
+      # call), matching axn-mcp's existing semantics. Before, a tool wrapped once at boot -- which is
+      # what `.tools` / `chat.with_tools` produce -- froze whatever the flag resolved to at that
+      # instant, so flipping it afterwards silently did nothing to any live tool.
+      it "resolves the flag per call, so a change after wrap reaches an already-wrapped tool" do
+        tool = described_class.wrap(opaque_axn)
+
+        expect(JSON.parse(tool.new.execute)["obj"]).to include("OpaqueValue")
+
+        Axn::RubyLLM.configure { |c| c.reject_opaque_exposed_values = true }
+
+        expect(tool.new.execute).to eq(error: Axn::RubyLLM::ToolAdapter::ADAPTER_FAILURE_MESSAGE)
+      end
     end
 
     describe "halt_after:" do
