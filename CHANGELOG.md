@@ -7,9 +7,7 @@
 - **`record_otel_attributes!` now uses `Axn::Extensions::Tracing.annotate_span`** instead of the
   unreliable ambient `OpenTelemetry::Trace.current_span` lookup, which could disagree with the span
   axn's own tracer actually opened (PRO-3278) and silently drop every `gen_ai.*` attribute. Requires
-  axn `>= 0.1.0-alpha.6` (not yet released; temporarily pinned to axn's `main` branch in the
-  Gemfile — see PRO-3282. The earlier note here said `alpha.5.2`; that release was never cut and
-  `annotate_span` now ships in `alpha.6` alongside `Axn::Tools::AdapterSerialization`).
+  axn `>= 0.1.0-alpha.6`.
 
 ### Fixed
 
@@ -60,6 +58,12 @@
   unchanged), and it rescues `SystemStackError`/`ScriptError` in addition to `StandardError`, so a
   runaway `as_json`/`to_h` on an exposed value now becomes a tool error rather than escaping into the
   chat.
+
+### Requires
+
+- **axn `>= 0.1.0-alpha.6`** (released), for `Axn::Tools::AdapterSerialization` (PRO-2996) and
+  `Axn::Extensions::Tracing.annotate_span` (PRO-3278). No Gemfile override needed — resolves from
+  RubyGems.
 
 ## [0.2.0] - 2026-08-05
 
