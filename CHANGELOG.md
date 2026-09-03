@@ -1,16 +1,38 @@
 # Changelog
 
-## [Unreleased]
+## [0.2.1] - 2026-09-03
+
+### Added
+
+- **[FEAT] Every tool call is now stamped `invoked_via: :ruby_llm`** (PRO-3332), via
+  `Axn::Tools::Invoker.new(adapter: :ruby_llm)`. No adapter-side work required — the stamp applies to
+  the wrapped Axn and any nested sub-axn or enqueued Sidekiq job for the life of the call tree, so a
+  Datadog dashboard (or any `Axn.config.on_exception`/tracing consumer reading the resolved
+  `invoked_via` dimension) can separate tool-driven traffic from an ordinary direct `.call`.
 
 ### Changed
 
 - **`record_otel_attributes!` now uses `Axn::Extensions::Tracing.annotate_span`** instead of the
   unreliable ambient `OpenTelemetry::Trace.current_span` lookup, which could disagree with the span
   axn's own tracer actually opened (PRO-3278) and silently drop every `gen_ai.*` attribute. Requires
-  axn `>= 0.1.0-alpha.5.2` (not yet released; temporarily pinned to axn's `main` branch in the
-  Gemfile — see PRO-3282).
+  axn `>= 0.1.0-alpha.6`.
 
 ### Fixed
+
+- **[BUGFIX] `reject_opaque_exposed_values` is now resolved per tool call instead of once at wrap
+  time.** The setting is `overridable:`, so a per-tool `configure(:ruby_llm) { |c| ... }` /
+  `tool ruby_llm: { ... }` bag or a gem-wide `Axn::RubyLLM.configure` assignment is meant to be what
+  a tool honors — but `wrap` resolved the value eagerly and the built tool class closed over that
+  Boolean forever. Since the normal way to build tools is once at boot (`chat.with_tools(*Axn::RubyLLM.tools)`),
+  any change to the setting *after* that point silently did nothing to a live tool: the wrapped class
+  kept whatever the flag happened to resolve to at wrap time, with no warning and no way to tell from
+  the outside. Resolution now happens inside `#execute`, at the moment the result is rendered, so a
+  tool always reflects the currently-configured value — the same per-call semantics `axn-mcp` already
+  had. **Old vs new:** a tool wrapped while the flag was `false` and later switched to `true` used to
+  keep shipping opaque renderings; it now fails those calls with the generic tool error, as configured.
+  Only the *timing* changed — the resolution order (per-class override, then gem-wide config, then the
+  `false` default) is unchanged, so a setup that configures before wrapping (the overwhelmingly common
+  case, and every documented example) behaves exactly as before.
 
 - **A map's `additionalProperties` (and a Hash's `minProperties`/`maxProperties`) are no longer silently
   lost at Gemini.** RubyLLM's Gemini converter rebuilds each property from a fixed whitelist that omits all
@@ -27,6 +49,29 @@
   (`configure(:ruby_llm)` / `Axn::RubyLLM.config.reject_opaque_exposed_values`) whenever the resolved
   value is `true` — matching `axn-openapi`'s dispatcher hint and `axn-mcp`'s guard. Previously an operator
   had to guess which knob caused a rejection since the setting is per-tool overridable.
+
+### Internal
+
+- **[INTERNAL] Adopted axn's `Axn::Tools::AdapterSerialization` mixin (PRO-2996)** in place of this
+  gem's hand-rolled copies of the same three things. `Axn::RubyLLM` now `extend`s the mixin alongside
+  `Axn::Tools::AdapterRoots` and uses `declare_reject_opaque_exposed_values! default: false` for the
+  setting, `Axn::RubyLLM.serialize_exposed(result)` for the render (which resolves the per-tool flag
+  itself — see the Fixed entry above), and `Axn::RubyLLM.guard_tool_response(axn_class, on_error:)`
+  for the transport-mapping guard. The default `tool_roots` moved to `tool_roots_default %w[agent_tools]`,
+  which drops this gem's hand-copied `AdapterRoots.validate!` lambda and validates the default eagerly
+  at gem load rather than at the registry's first read. No public API, config name, default, or
+  user-facing string changed. Two second-order effects worth knowing: the mixin's guard runs its
+  dev-mode re-raise *before* reporting (so under `best_effort_raises_in_dev` a mapping failure now
+  raises without first emitting the `reject_opaque_exposed_values` log hint — production behavior is
+  unchanged), and it rescues `SystemStackError`/`ScriptError` in addition to `StandardError`, so a
+  runaway `as_json`/`to_h` on an exposed value now becomes a tool error rather than escaping into the
+  chat.
+
+### Requires
+
+- **axn `>= 0.1.0-alpha.6`** (released), for `Axn::Tools::AdapterSerialization` (PRO-2996) and
+  `Axn::Extensions::Tracing.annotate_span` (PRO-3278). No Gemfile override needed — resolves from
+  RubyGems.
 
 ## [0.2.0] - 2026-08-05
 

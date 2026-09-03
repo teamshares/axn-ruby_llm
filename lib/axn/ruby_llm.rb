@@ -12,17 +12,20 @@ module Axn
     include Axn::Mountable
     extend Axn::Configurable
     extend Axn::Tools::AdapterRoots
+    extend Axn::Tools::AdapterSerialization
 
     setting :default_model, default: "gpt-4o-mini"
     setting :enabled, default: true
     setting :error_headline, default: "LLM request failed"
 
-    # `Axn::Tools::AdapterRoots` (extended above) declares `tool_roots` with `default: []`; re-declare
-    # it (core's `setting` is last-wins) to ship the shared agent-tools dir as the default, so any Axn
+    # `Axn::Tools::AdapterRoots` (extended above) declares `tool_roots` with core's conservative
+    # `default: []`; `tool_roots_default` re-declares it to ship the shared agent-tools dir, so any Axn
     # living under `app/agent_tools` is exposed as a `:ruby_llm` tool out of the box. It's the same dir
-    # axn-mcp defaults to, so one Axn there is authored once and surfaces on both. The re-declaration
-    # keeps AdapterRoots' broad-path validation (no widening a root to `app/`/`actions`/`.`/`..`).
-    setting :tool_roots, default: ["agent_tools"], validate: ->(value) { Axn::Tools::AdapterRoots.validate!(value) }
+    # axn-mcp defaults to, so one Axn there is authored once and surfaces on both. Going through
+    # `tool_roots_default` rather than a hand-written `setting` keeps AdapterRoots' broad-path
+    # validation (no widening a root to `app/`/`actions`/`.`/`..`) without hand-copying its lambda, and
+    # validates the default EAGERLY at gem load instead of at the registry's first read.
+    tool_roots_default %w[agent_tools]
 
     # Register this module as the `:ruby_llm` adapter AND its config source (PRO-2948): the registry
     # reads `Axn::RubyLLM.config.tool_roots` off the source to grant directory-based membership.

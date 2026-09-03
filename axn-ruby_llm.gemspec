@@ -29,10 +29,9 @@ Gem::Specification.new do |spec|
   ) { |ls| ls.readlines("\x0", chomp: true) }
   spec.require_paths = ["lib"]
 
-  # PRO-3282: floor should read ">= 0.1.0-alpha.5.2" (the release with `Tracing.annotate_span`,
-  # PRO-3278) once axn cuts it -- its main branch has the code but hasn't bumped VERSION past
-  # alpha.5.1 yet, and the Gemfile's git pin resolves against that. Tighten this alongside dropping
-  # the Gemfile override.
-  spec.add_dependency "axn", ">= 0.1.0-alpha.5.1", "< 0.2.0"
+  # PRO-2996: requires `Axn::Tools::AdapterSerialization` (`tool_roots_default`,
+  # `declare_reject_opaque_exposed_values!`, `serialize_exposed`, `guard_tool_response`) and
+  # `Axn::Extensions::Tracing.annotate_span` (PRO-3278) -- both released in 0.1.0-alpha.6.
+  spec.add_dependency "axn", ">= 0.1.0-alpha.6", "< 0.2.0"
   spec.add_dependency "ruby_llm", ">= 1.15", "< 2.0"
 end

@@ -497,6 +497,22 @@ RSpec.describe Axn::RubyLLM do
         tool = described_class.wrap(optional_axn).new
         expect(tool.execute(name: "Ada", nickname: nil)).to eq({ "greeting" => "Hello, Ada!" }.to_json)
       end
+
+      # PRO-3332: the Invoker is constructed with `adapter: :ruby_llm`, so every axn run through it is
+      # stamped `invoked_via: :ruby_llm` for the duration of the call (Axn::Extensions::InvokedVia) --
+      # no per-tool work needed for a Datadog dashboard to separate tool-driven traffic from an
+      # ordinary direct `.call`.
+      it "stamps the call as invoked via :ruby_llm" do
+        stamping_axn = Class.new do
+          include Axn
+
+          exposes :stamp
+          def call = expose(stamp: Axn::Internal::CurrentEntryPoint.current)
+        end
+
+        tool = described_class.wrap(stamping_axn).new
+        expect(tool.execute).to eq({ "stamp" => "ruby_llm" }.to_json)
+      end
     end
 
     describe "security: a provider-supplied ambient_context must never override the caller's context" do
@@ -692,6 +708,21 @@ RSpec.describe Axn::RubyLLM do
         payload = described_class.wrap(opaque_axn).new.execute
         expect(payload).to be_a(String)
         expect(JSON.parse(payload)["obj"]).to include("OpaqueValue")
+      end
+
+      # PRO-2996: resolution moved from WRAP time to PER CALL when the render step moved to
+      # `Axn::RubyLLM.serialize_exposed` (which derives the class from the result and resolves on each
+      # call), matching axn-mcp's existing semantics. Before, a tool wrapped once at boot -- which is
+      # what `.tools` / `chat.with_tools` produce -- froze whatever the flag resolved to at that
+      # instant, so flipping it afterwards silently did nothing to any live tool.
+      it "resolves the flag per call, so a change after wrap reaches an already-wrapped tool" do
+        tool = described_class.wrap(opaque_axn)
+
+        expect(JSON.parse(tool.new.execute)["obj"]).to include("OpaqueValue")
+
+        Axn::RubyLLM.configure { |c| c.reject_opaque_exposed_values = true }
+
+        expect(tool.new.execute).to eq(error: Axn::RubyLLM::ToolAdapter::ADAPTER_FAILURE_MESSAGE)
       end
     end
 
