@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- **[FEAT] Every tool call is now stamped `invoked_via: :ruby_llm`** (PRO-3332), via
+  `Axn::Tools::Invoker.new(adapter: :ruby_llm)`. No adapter-side work required — the stamp applies to
+  the wrapped Axn and any nested sub-axn or enqueued Sidekiq job for the life of the call tree, so a
+  Datadog dashboard (or any `Axn.config.on_exception`/tracing consumer reading the resolved
+  `invoked_via` dimension) can separate tool-driven traffic from an ordinary direct `.call`.
+
 ### Changed
 
 - **`record_otel_attributes!` now uses `Axn::Extensions::Tracing.annotate_span`** instead of the

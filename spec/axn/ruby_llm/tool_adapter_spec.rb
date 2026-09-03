@@ -497,6 +497,22 @@ RSpec.describe Axn::RubyLLM do
         tool = described_class.wrap(optional_axn).new
         expect(tool.execute(name: "Ada", nickname: nil)).to eq({ "greeting" => "Hello, Ada!" }.to_json)
       end
+
+      # PRO-3332: the Invoker is constructed with `adapter: :ruby_llm`, so every axn run through it is
+      # stamped `invoked_via: :ruby_llm` for the duration of the call (Axn::Extensions::InvokedVia) --
+      # no per-tool work needed for a Datadog dashboard to separate tool-driven traffic from an
+      # ordinary direct `.call`.
+      it "stamps the call as invoked via :ruby_llm" do
+        stamping_axn = Class.new do
+          include Axn
+
+          exposes :stamp
+          def call = expose(stamp: Axn::Internal::CurrentEntryPoint.current)
+        end
+
+        tool = described_class.wrap(stamping_axn).new
+        expect(tool.execute).to eq({ "stamp" => "ruby_llm" }.to_json)
+      end
     end
 
     describe "security: a provider-supplied ambient_context must never override the caller's context" do

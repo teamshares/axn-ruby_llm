@@ -131,8 +131,10 @@ module Axn
               # (the injection guard) while the wrap's own trusted context is injected in its place.
               # Contract violations settle user-facing, so `input_invalid?` lets us hand the model a
               # clean, correctable "Invalid tool arguments" error instead of leaking a dev-facing bug
-              # (which also keeps a bad tool call from paging on_exception).
-              invoker = ::Axn::Tools::Invoker.new(user_facing_input_errors: true, reject_undeclared_inputs: true)
+              # (which also keeps a bad tool call from paging on_exception). `adapter: :ruby_llm`
+              # (PRO-3332) stamps the invoked_via dimension around the call, so a Datadog dashboard can
+              # separate tool-driven traffic from ordinary direct `.call`s with no per-call work here.
+              invoker = ::Axn::Tools::Invoker.new(adapter: :ruby_llm, user_facing_input_errors: true, reject_undeclared_inputs: true)
               result = if ambient_context.equal?(NOT_SET)
                          invoker.call(axn_class, args)
                        else
