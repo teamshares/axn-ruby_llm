@@ -1,6 +1,8 @@
 # Changelog
 
-## [0.3.0.rc1] - 2026-09-17
+## [Unreleased]
+
+Ships as `0.3.0.rc1` when released.
 
 **Targets `ruby_llm`'s 2.0 release-candidate line, not a stable release.** This gem is itself a
 prerelease and stays one until `ruby_llm` 2.0.0 reaches GA — both must be named explicitly in a
