@@ -155,6 +155,18 @@ RSpec.describe Axn::RubyLLM::Ask do
           .and_return(chat_instance)
         expect(result).to be_ok
       end
+
+      it "pins strict: false, rather than leaving it to RubyLLM's own inference" do
+        # RubyLLM infers strict: true whenever every property is required (the common case for an
+        # Axn's exposed contract, as here) -- but axn's output_schema never emits the
+        # additionalProperties: false OpenAI's strict mode requires on every object node, so an
+        # unpinned schema would silently request strict mode on exactly the schemas that fail it
+        # (a 400 invalid_json_schema from OpenAI, confirmed against OpenAI's own docs).
+        expect(chat_instance).to receive(:with_schema)
+          .with(hash_including(strict: false))
+          .and_return(chat_instance)
+        result
+      end
     end
   end
 

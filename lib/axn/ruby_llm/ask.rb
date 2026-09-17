@@ -180,10 +180,20 @@ module Axn
       # through -- with_schema itself checks for #to_json_schema), or an Axn class: the same
       # reflection the tool adapter already uses for input (`input_schema`), mirrored here for
       # output. `output_schema` is axn's own public JSON Schema Hash for its `exposes` contract.
+      #
+      # `strict: false` is pinned deliberately, not left to RubyLLM's own inference. OpenAI's
+      # strict mode requires `additionalProperties: false` on every object node -- confirmed via
+      # OpenAI's docs and community reports, not just RubyLLM's source: omitting it fails the
+      # request with a 400 `invalid_json_schema`, it does not silently degrade -- but axn's
+      # `exposes` contract makes no such "no extra keys" guarantee, so `output_schema` never emits
+      # it. Chat#with_schema's own strict_schema? (chat_completions/chat.rb) infers `strict: true`
+      # whenever every property is required, which is the common case for an Axn's output contract
+      # (see the README example), so leaving `strict:` unset here would silently request strict
+      # mode on exactly the schemas that fail it.
       def resolved_schema
         return schema unless schema.is_a?(::Class) && schema.respond_to?(:output_schema)
 
-        { name: schema.name || "response", schema: schema.output_schema }
+        { name: schema.name || "response", schema: schema.output_schema, strict: false }
       end
 
       # `tools:` accepts a mix of bare Axn classes (wrapped here, so callers can pass their own Axns

@@ -108,6 +108,8 @@ result = Axn::RubyLLM.ask(prompt: "...", schema: CompanyMatch)
 result.response # => { "company_id" => 42, "confidence" => 0.92, "reasoning" => "..." }
 ```
 
+This path always requests **non-strict** structured output (`strict: false`), regardless of RubyLLM's own strict-inference. OpenAI's strict mode requires `additionalProperties: false` on every object node or the request fails outright with a 400 `invalid_json_schema` — but axn's `exposes` contract makes no "no extra keys" guarantee, so `output_schema` never emits it. You still get the declared shape and required keys; you don't get OpenAI's "no extra keys" enforcement. Pass a `Schematist::Schema` (which does emit `additionalProperties: false`) instead if you need strict mode specifically.
+
 ### Token counts and cost
 
 Every successful result exposes token usage and cost, read off RubyLLM's own usage ledger (`Chat#tokens` / `Chat#cost`) — which already sums every provider attempt for the call, including a tool loop's multiple round-trips and any retries:

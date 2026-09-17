@@ -35,7 +35,10 @@ replaces the previous `">= 1.15", "< 2.0"` floor, and 1.x is no longer supported
   Completions-only, and OpenAI now defaults to the Responses API). `schema:` is the replacement —
   it now additionally accepts a plain Hash (already supported, previously undocumented) or an Axn
   class (new: forwards `axn_class.output_schema`), alongside a `Schematist::Schema`
-  class/instance.
+  class/instance. The Axn-class form always requests `strict: false`: OpenAI's strict mode requires
+  `additionalProperties: false` on every object node (confirmed against OpenAI's docs — a schema
+  missing it fails outright with a 400 `invalid_json_schema`, it does not silently degrade), and
+  axn's `output_schema` never emits it. Pass a `Schematist::Schema` instead if you need strict mode.
 - **`RubyLLM::Schema` is `Schematist::Schema` in RubyLLM 2.0** — this gem does not shim the old
   name. Any `schema:` class you declare must subclass `Schematist::Schema`.
 - **`Axn::RubyLLM.configuration` / `.reset_configuration!` removed** — these were deprecated in
