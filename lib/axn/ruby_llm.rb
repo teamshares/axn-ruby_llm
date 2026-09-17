@@ -1,6 +1,5 @@
 # frozen_string_literal: true
 
-require "delegate"
 require "ruby_llm"
 require "axn"
 
@@ -33,16 +32,6 @@ module Axn
 
     mount_axn :ask, Ask
 
-    # Backward-compatible view of `config` returned by the deprecated `configuration` alias. The
-    # pre-DSL `Configuration#enabled?` invoked a callable gate (`enabled = -> { ... }`); the
-    # DSL-generated `config.enabled?` returns an assigned Proc as-is (always truthy). Delegate
-    # everything to `config`, but restore the callable-resolving `enabled?` (via the module-level
-    # `enabled?`) so a compatibility caller's production gate still resolves correctly during the
-    # deprecation window instead of silently reading as enabled. Removed with the alias in 0.3.0.
-    class DeprecatedConfigProxy < SimpleDelegator
-      def enabled? = Axn::RubyLLM.enabled?
-    end
-
     class << self
       # `enabled` accepts a Boolean OR a callable — the documented production-gating idiom is
       # `c.enabled = -> { Rails.env.production? }`. axn's Configurable used to invoke an assigned
@@ -53,30 +42,6 @@ module Axn
       def enabled?
         value = config.enabled
         value.respond_to?(:call) ? !!value.call : !!value
-      end
-
-      # DEPRECATED backward-compatible aliases for the pre-DSL API. The
-      # Axn::Configurable DSL standardizes on `.config` / `reset_config!`.
-      # These keep older callers working but emit a deprecation warning and
-      # are scheduled for removal in the next minor version (see DEPRECATIONS.md).
-      def configuration
-        _warn_deprecated_alias("Axn::RubyLLM.configuration", "Axn::RubyLLM.config")
-        DeprecatedConfigProxy.new(config)
-      end
-
-      def reset_configuration!
-        _warn_deprecated_alias("Axn::RubyLLM.reset_configuration!", "Axn::RubyLLM.reset_config!")
-        reset_config!
-      end
-
-      private
-
-      def _warn_deprecated_alias(old, new)
-        warn(
-          "[axn-ruby_llm] DEPRECATION: #{old} is deprecated and will be removed in the next minor version; use #{new} instead.",
-          category: :deprecated,
-          uplevel: 2,
-        )
       end
     end
   end

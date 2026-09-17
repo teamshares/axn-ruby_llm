@@ -7,20 +7,20 @@ RSpec.describe Axn::RubyLLM::Ask do
   let(:params) { { prompt: } }
 
   let(:llm_response_content) { "Here is the summary." }
+  let(:llm_response_parsed) { nil }
   let(:llm_input_tokens) { 12 }
   let(:llm_output_tokens) { 34 }
   let(:llm_model_id) { "gpt-4o-mini" }
-  let(:llm_cost) { instance_double(RubyLLM::Cost, total: 0.00056, tokens?: true) }
-  let(:llm_model_info) { instance_double("RubyLLM::Model") }
+  let(:llm_tokens) do
+    instance_double(RubyLLM::Tokens, input: llm_input_tokens, output: llm_output_tokens, cache_read: nil, cache_write: nil)
+  end
+  let(:llm_cost) { instance_double(RubyLLM::Cost, total: 0.00056) }
   let(:llm_response) do
     instance_double(
       RubyLLM::Message,
       content: llm_response_content,
-      input_tokens: llm_input_tokens,
-      output_tokens: llm_output_tokens,
-      cache_read_tokens: nil,
-      cache_write_tokens: nil,
-      model_id: llm_model_id,
+      parsed: llm_response_parsed,
+      model: llm_model_id,
     )
   end
   let(:chat_instance) { instance_double(RubyLLM::Chat) }
@@ -28,19 +28,20 @@ RSpec.describe Axn::RubyLLM::Ask do
   before do
     allow(RubyLLM).to receive(:chat).and_return(chat_instance)
     allow(chat_instance).to receive(:with_instructions).and_return(chat_instance)
-    allow(chat_instance).to receive(:with_params).and_return(chat_instance)
+    allow(chat_instance).to receive(:with_schema).and_return(chat_instance)
+    allow(chat_instance).to receive(:with_temperature).and_return(chat_instance)
+    allow(chat_instance).to receive(:with_provider_options).and_return(chat_instance)
     allow(chat_instance).to receive(:with_tools).and_return(chat_instance)
     allow(chat_instance).to receive(:ask).with(prompt).and_return(llm_response)
-    allow(chat_instance).to receive(:messages).and_return([llm_response])
-    allow(RubyLLM.models).to receive(:find).with(llm_model_id).and_return(llm_model_info)
-    allow(llm_response).to receive(:cost).with(model: llm_model_info).and_return(llm_cost)
+    allow(chat_instance).to receive(:tokens).and_return(llm_tokens)
+    allow(chat_instance).to receive(:cost).and_return(llm_cost)
   end
 
   after do
     Axn::RubyLLM.reset_config!
   end
 
-  context "with default params (json: false)" do
+  context "with default params" do
     it "returns raw text response" do
       expect(result).to be_ok
       expect(result.response).to eq("Here is the summary.")
@@ -50,28 +51,8 @@ RSpec.describe Axn::RubyLLM::Ask do
       expect(result.success).to eq("LLM request completed")
     end
 
-    it "does not configure JSON response format" do
-      expect(chat_instance).not_to receive(:with_params)
-      result
-    end
-
     it "exposes raw_message" do
       expect(result.raw_message).to eq(llm_response)
-    end
-  end
-
-  context "with json: true" do
-    let(:llm_response_content) { { "answer" => "42" }.to_json }
-    let(:params) { { prompt:, json: true } }
-
-    it "returns parsed JSON response" do
-      expect(result).to be_ok
-      expect(result.response).to eq({ "answer" => "42" })
-    end
-
-    it "configures chat with JSON response format" do
-      expect(chat_instance).to receive(:with_params).with(response_format: { type: "json_object" })
-      result
     end
   end
 
@@ -109,15 +90,16 @@ RSpec.describe Axn::RubyLLM::Ask do
   context "with a temperature" do
     let(:params) { { prompt:, temperature: 0.7 } }
 
-    it "calls with_params for temperature" do
-      expect(chat_instance).to receive(:with_params).with(temperature: 0.7).and_return(chat_instance)
+    it "calls with_temperature" do
+      expect(chat_instance).to receive(:with_temperature).with(0.7).and_return(chat_instance)
       result
     end
   end
 
   context "with a schema" do
     let(:schema_class) { Class.new }
-    let(:llm_response_content) { { "company_id" => 7, "confidence" => 0.9 } }
+    let(:llm_response_content) { { "company_id" => 7, "confidence" => 0.9 }.to_json }
+    let(:llm_response_parsed) { { "company_id" => 7, "confidence" => 0.9 } }
     let(:params) { { prompt:, schema: schema_class } }
 
     before do
@@ -130,13 +112,17 @@ RSpec.describe Axn::RubyLLM::Ask do
       expect(result.response).to eq({ "company_id" => 7, "confidence" => 0.9 })
     end
 
-    it "does not also force JSON response_format params" do
-      expect(chat_instance).not_to receive(:with_params).with(response_format: anything)
-      result
+    context "when the LLM returns malformed JSON despite the schema" do
+      before { allow(llm_response).to receive(:parsed).and_raise(JSON::ParserError, "unexpected token") }
+
+      it "fails with the generic JSON parse error message" do
+        expect(result).not_to be_ok
+        expect(result.error).to eq("LLM request failed: Response was not valid JSON")
+      end
     end
 
-    context "when the LLM returns non-JSON despite the schema" do
-      let(:llm_response_content) { "not valid json {broken" }
+    context "when the LLM returns valid JSON that isn't an object despite the schema" do
+      let(:llm_response_parsed) { [1, 2, 3] }
 
       it "fails with a schema-specific error" do
         expect(result).not_to be_ok
@@ -144,17 +130,30 @@ RSpec.describe Axn::RubyLLM::Ask do
       end
     end
 
-    context "with json: true also set" do
-      let(:params) { { prompt:, schema: schema_class, json: true } }
+    context "given an Axn class" do
+      let(:schema_class) do
+        Class.new do
+          include Axn
 
-      it "schema wins; response is the Hash, no manual JSON.parse path" do
-        expect(result).to be_ok
-        expect(result.response).to eq({ "company_id" => 7, "confidence" => 0.9 })
+          exposes :company_id, type: Integer
+          exposes :confidence, type: Numeric
+          def call; end
+        end
+      end
+      let(:llm_response_content) { { "company_id" => 1, "confidence" => 0.5 }.to_json }
+      let(:llm_response_parsed) { { "company_id" => 1, "confidence" => 0.5 } }
+
+      before do
+        allow(chat_instance).to receive(:with_schema)
+          .with(hash_including(schema: schema_class.output_schema))
+          .and_return(chat_instance)
       end
 
-      it "does not configure with_params(response_format:)" do
-        expect(chat_instance).not_to receive(:with_params).with(response_format: anything)
-        result
+      it "forwards the Axn class's output_schema, wrapped with a name" do
+        expect(chat_instance).to receive(:with_schema)
+          .with(hash_including(schema: schema_class.output_schema))
+          .and_return(chat_instance)
+        expect(result).to be_ok
       end
     end
   end
@@ -216,6 +215,9 @@ RSpec.describe Axn::RubyLLM::Ask do
     {
       "RubyLLM::ConfigurationError" => [RubyLLM::ConfigurationError, "No API key configured for openai"],
       "RubyLLM::ModelNotFoundError" => [RubyLLM::ModelNotFoundError, "Model gpt-99 not found"],
+      "RubyLLM::ModelRegistryError" => [RubyLLM::ModelRegistryError, "registry fetch failed"],
+      "RubyLLM::PendingToolCallsError" => [RubyLLM::PendingToolCallsError, "unanswered tool calls"],
+      "RubyLLM::CancelledError" => [RubyLLM::CancelledError, "Chat generation cancelled"],
     }.each do |name, (klass, message)|
       context "with #{name}" do
         before { allow(chat_instance).to receive(:ask).and_raise(klass.new(message)) }
@@ -256,18 +258,8 @@ RSpec.describe Axn::RubyLLM::Ask do
     end
   end
 
-  context "when JSON parsing fails" do
-    let(:llm_response_content) { "invalid json {broken" }
-    let(:params) { { prompt:, json: true } }
-
-    it "fails with the JSON parse error message" do
-      expect(result).not_to be_ok
-      expect(result.error).to eq("LLM request failed: Response was not valid JSON")
-    end
-  end
-
   describe "token counts and cost" do
-    it "exposes input_tokens and output_tokens from the LLM response" do
+    it "exposes input_tokens and output_tokens from the chat's token ledger" do
       expect(result.input_tokens).to eq(12)
       expect(result.output_tokens).to eq(34)
       expect(result.cache_read_tokens).to be_nil
@@ -279,83 +271,41 @@ RSpec.describe Axn::RubyLLM::Ask do
       expect(result.cost).to eq(0.00056)
     end
 
-    it "exposes the full Cost struct via cost_breakdown" do
+    it "exposes the full Cost object via cost_breakdown" do
       expect(result.cost_breakdown).to eq(llm_cost)
     end
 
-    # chat.ask appends the user message before completing, so even a normal no-tool call leaves
-    # [user, assistant] on the chat (the unit stubs above use a single-element messages array, which
-    # hides this). The user message carries no tokens; it must not force cost_breakdown through
-    # aggregate -- which returns a Cost with nil tokens/model -- so the response's own Cost is kept.
-    context "on a real single-turn chat where messages == [user, assistant]" do
-      let(:user_message) do
-        instance_double(RubyLLM::Message, input_tokens: nil, output_tokens: nil,
-                                          cache_read_tokens: nil, cache_write_tokens: nil, model_id: nil)
-      end
+    context "when cache tokens are present" do
+      let(:llm_tokens) { instance_double(RubyLLM::Tokens, input: 100, output: 20, cache_read: 30, cache_write: 10) }
 
-      before do
-        allow(user_message).to receive(:cost).with(model: llm_model_info).and_return(RubyLLM::Cost.new(tokens: nil))
-        allow(chat_instance).to receive(:messages).and_return([user_message, llm_response])
-      end
-
-      it "preserves the response's own Cost (not a detail-dropping aggregate)" do
-        expect(result.cost_breakdown).to equal(llm_cost)
-        expect(result.cost).to eq(0.00056)
-      end
-
-      it "still sums tokens across only the token-bearing messages" do
-        expect(result.input_tokens).to eq(12)
-        expect(result.output_tokens).to eq(34)
+      it "includes cache tokens in prompt_tokens" do
+        expect(result.prompt_tokens).to eq(140) # input + cache_read + cache_write
       end
     end
 
     context "when the provider returns no token data" do
-      let(:llm_input_tokens) { nil }
-      let(:llm_output_tokens) { nil }
+      let(:llm_tokens) { instance_double(RubyLLM::Tokens, input: nil, output: nil, cache_read: nil, cache_write: nil) }
 
-      it "exposes nil prompt_tokens" do
+      it "exposes nil token counts and nil prompt_tokens" do
+        expect(result.input_tokens).to be_nil
+        expect(result.output_tokens).to be_nil
         expect(result.prompt_tokens).to be_nil
       end
     end
 
     context "when RubyLLM has no pricing for the model" do
-      before do
-        allow(RubyLLM.models).to receive(:find).with(llm_model_id).and_return(nil)
-      end
+      let(:llm_cost) { instance_double(RubyLLM::Cost, total: nil) }
 
-      it "still succeeds with nil cost fields" do
+      it "still succeeds with nil cost" do
         expect(result).to be_ok
         expect(result.cost).to be_nil
-        expect(result.cost_breakdown).to be_nil
       end
 
-      it "still exposes token counts" do
+      it "still exposes the Cost object and token counts" do
+        expect(result.cost_breakdown).to eq(llm_cost)
         expect(result.input_tokens).to eq(12)
         expect(result.output_tokens).to eq(34)
         expect(result.prompt_tokens).to eq(12)
-      end
-    end
-
-    context "when RubyLLM.models.find raises ModelNotFoundError" do
-      before do
-        allow(RubyLLM.models).to receive(:find).with(llm_model_id).and_raise(RubyLLM::ModelNotFoundError.new("registry boom"))
-      end
-
-      it "treats missing model info as nil cost" do
-        expect(result).to be_ok
-        expect(result.cost).to be_nil
-        expect(result.cost_breakdown).to be_nil
-      end
-    end
-
-    context "when RubyLLM.models.find raises an unexpected StandardError" do
-      before do
-        allow(RubyLLM.models).to receive(:find).with(llm_model_id).and_raise(StandardError.new("registry explosion"))
-      end
-
-      it "propagates as an LLM request failure, without leaking the exception message" do
-        expect(result).not_to be_ok
-        expect(result.error).to eq("LLM request failed")
       end
     end
   end
@@ -404,7 +354,7 @@ RSpec.describe Axn::RubyLLM::Ask do
         expect(result.response).to eq("stubbed response value")
         expect(result.stubbed).to eq(true)
         expect(result.raw_message.content).to eq("stubbed response value")
-        expect(result.raw_message.model_id).to eq("stubbed")
+        expect(result.raw_message.model).to eq("stubbed")
         expect(result.input_tokens).to eq(0)
         expect(result.output_tokens).to eq(0)
         expect(result.cache_read_tokens).to eq(0)
@@ -431,16 +381,6 @@ RSpec.describe Axn::RubyLLM::Ask do
         expect(result).to be_ok
         expect(result.stubbed).to eq(false)
         expect(result.response).to eq("Here is the summary.")
-      end
-    end
-
-    context "with json: true while disabled" do
-      let(:params) { { prompt:, json: true } }
-      before { Axn::RubyLLM.configure { |c| c.enabled = false } }
-
-      it "stubs with a non-empty Hash" do
-        expect(result.response).to eq({ "stubbed" => true })
-        expect(result.stubbed).to eq(true)
       end
     end
 
@@ -495,83 +435,25 @@ RSpec.describe Axn::RubyLLM::Ask do
   end
 
   context "across a tool loop (multiple model round-trips in one ask)" do
-    let(:turn1) do
-      instance_double(RubyLLM::Message, content: "calling a tool", input_tokens: 100, output_tokens: 10,
-                                        cache_read_tokens: nil, cache_write_tokens: nil, model_id: llm_model_id)
-    end
-    let(:turn2) do
-      instance_double(RubyLLM::Message, content: "final answer", input_tokens: 50, output_tokens: 20,
-                                        cache_read_tokens: nil, cache_write_tokens: nil, model_id: llm_model_id)
-    end
+    let(:final_turn) { instance_double(RubyLLM::Message, content: "final answer", parsed: nil, model: llm_model_id) }
+    let(:llm_tokens) { instance_double(RubyLLM::Tokens, input: 150, output: 30, cache_read: nil, cache_write: nil) }
+    let(:llm_cost) { instance_double(RubyLLM::Cost, total: 0.0045) }
 
     before do
-      allow(turn1).to receive(:cost).with(model: llm_model_info)
-                                    .and_return(RubyLLM::Cost.new(amounts: { input: 0.001, output: 0.002 }, has_tokens: true, missing: []))
-      allow(turn2).to receive(:cost).with(model: llm_model_info)
-                                    .and_return(RubyLLM::Cost.new(amounts: { input: 0.0005, output: 0.001 }, has_tokens: true, missing: []))
-      # The chat accumulates both assistant turns; ask returns the final one.
-      allow(chat_instance).to receive(:messages).and_return([turn1, turn2])
-      allow(chat_instance).to receive(:ask).with(prompt).and_return(turn2)
+      # RubyLLM's own Chat#tokens / Chat#cost aggregate every provider attempt across the whole
+      # tool loop -- not just the final turn -- so Ask reads the chat-wide ledger, not
+      # chat.messages. The stubbed ledger here already reflects that whole-loop total.
+      allow(chat_instance).to receive(:ask).with(prompt).and_return(final_turn)
     end
 
-    it "sums token usage across every turn, not just the final one" do
+    it "sums token usage and cost across every turn, not just the final one" do
       expect(result.input_tokens).to eq(150)
       expect(result.output_tokens).to eq(30)
-      expect(result.prompt_tokens).to eq(150)
-    end
-
-    it "sums cost across every turn" do
-      expect(result.cost).to be_within(1e-9).of(0.0045)
-      expect(result.cost_breakdown.total).to be_within(1e-9).of(0.0045)
+      expect(result.cost).to eq(0.0045)
     end
 
     it "still exposes the final turn as raw_message" do
-      expect(result.raw_message).to eq(turn2)
-    end
-  end
-
-  context "when a wrapped tool halts the loop (halt_after:)" do
-    # chat.ask returns a ::RubyLLM::Tool::Halt (tool payload as #content), NOT a Message — and a Halt
-    # has no #model_id, so reading model/cost data off it would raise NoMethodError and turn a
-    # successful halt into "LLM request failed". Model/cost must come from the last assistant turn.
-    let(:halt_payload) { { "greeting" => "hi" }.to_json }
-    let(:halt) { RubyLLM::Tool::Halt.new(halt_payload) }
-    let(:assistant_turn) do
-      instance_double(RubyLLM::Message, role: :assistant, content: "", input_tokens: 42, output_tokens: 7,
-                                        cache_read_tokens: nil, cache_write_tokens: nil, model_id: llm_model_id)
-    end
-
-    before do
-      allow(assistant_turn).to receive(:cost).with(model: llm_model_info)
-                                             .and_return(RubyLLM::Cost.new(amounts: { input: 0.001, output: 0.002 }, has_tokens: true, missing: []))
-      allow(chat_instance).to receive(:ask).with(prompt).and_return(halt)
-      allow(chat_instance).to receive(:messages).and_return([assistant_turn])
-    end
-
-    it "succeeds instead of crashing on the Halt's missing model_id" do
-      expect(result).to be_ok
-    end
-
-    it "exposes the halted tool payload as the response" do
-      expect(result.response).to eq(halt_payload)
-    end
-
-    it "derives model, tokens, and cost from the last assistant turn" do
-      expect(result.input_tokens).to eq(42)
-      expect(result.output_tokens).to eq(7)
-      expect(result.cost).to be_within(1e-9).of(0.003)
-    end
-
-    context "with schema: (the halt payload never went through with_schema)" do
-      let(:schema_class) { Class.new }
-      let(:params) { { prompt:, schema: schema_class } }
-
-      before { allow(chat_instance).to receive(:with_schema).with(schema_class).and_return(chat_instance) }
-
-      it "parses the halted JSON payload into a Hash instead of failing 'not valid JSON'" do
-        expect(result).to be_ok
-        expect(result.response).to eq("greeting" => "hi")
-      end
+      expect(result.raw_message).to eq(final_turn)
     end
   end
 end
@@ -580,14 +462,10 @@ RSpec.describe "Axn::RubyLLM::Ask OTel attribute enrichment" do
   let(:prompt) { "Summarize this." }
 
   let(:llm_response) do
-    instance_double(RubyLLM::Message,
-                    content: "summary",
-                    input_tokens: 10,
-                    output_tokens: 5,
-                    cache_read_tokens: nil,
-                    cache_write_tokens: nil,
-                    model_id: "gpt-4o-mini")
+    instance_double(RubyLLM::Message, content: "summary", parsed: nil, model: "gpt-4o-mini")
   end
+  let(:llm_tokens) { instance_double(RubyLLM::Tokens, input: 10, output: 5, cache_read: nil, cache_write: nil) }
+  let(:llm_cost) { instance_double(RubyLLM::Cost, total: nil) }
   let(:chat_instance) { instance_double(RubyLLM::Chat) }
 
   # The one span in play: axn's own tracer, which record_otel_attributes! reaches via
@@ -606,12 +484,13 @@ RSpec.describe "Axn::RubyLLM::Ask OTel attribute enrichment" do
   before do
     allow(RubyLLM).to receive(:chat).and_return(chat_instance)
     allow(chat_instance).to receive(:with_instructions).and_return(chat_instance)
-    allow(chat_instance).to receive(:with_params).and_return(chat_instance)
     allow(chat_instance).to receive(:with_schema).and_return(chat_instance)
+    allow(chat_instance).to receive(:with_temperature).and_return(chat_instance)
+    allow(chat_instance).to receive(:with_provider_options).and_return(chat_instance)
+    allow(chat_instance).to receive(:with_tools).and_return(chat_instance)
     allow(chat_instance).to receive(:ask).and_return(llm_response)
-    allow(chat_instance).to receive(:messages).and_return([llm_response])
-    allow(RubyLLM.models).to receive(:find).and_return(nil)
-    allow(llm_response).to receive(:cost).and_return(nil)
+    allow(chat_instance).to receive(:tokens).and_return(llm_tokens)
+    allow(chat_instance).to receive(:cost).and_return(llm_cost)
     Axn.config.tracer = fake_axn_tracer
   end
 
@@ -630,10 +509,7 @@ RSpec.describe "Axn::RubyLLM::Ask OTel attribute enrichment" do
   end
 
   it "sets cost attribute when cost is available" do
-    model_info = instance_double("RubyLLM::Model")
-    cost_struct = instance_double(RubyLLM::Cost, total: 0.0007, tokens?: true)
-    allow(RubyLLM.models).to receive(:find).and_return(model_info)
-    allow(llm_response).to receive(:cost).with(model: model_info).and_return(cost_struct)
+    allow(chat_instance).to receive(:cost).and_return(instance_double(RubyLLM::Cost, total: 0.0007))
     Axn::RubyLLM.ask(prompt:)
     expect(axn_span).to have_received(:set_attribute).with("gen_ai.usage.cost", 0.0007)
   end

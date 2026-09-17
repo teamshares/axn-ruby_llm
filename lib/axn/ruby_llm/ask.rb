@@ -6,7 +6,6 @@ module Axn
       include Axn
 
       expects :prompt
-      expects :json, type: :boolean, default: false
       expects :schema, optional: true
       expects :model, optional: true
       expects :system_prompt, optional: true
@@ -24,22 +23,36 @@ module Axn
       exposes :cost_breakdown, allow_nil: true
       exposes :stubbed, type: :boolean, default: false
 
-      StubMessage = Data.define(:content, :input_tokens, :output_tokens, :cache_read_tokens, :cache_write_tokens, :model_id)
+      # Shape-compatible with a real ::RubyLLM::Message on the disabled path: `.content` is the raw
+      # text (JSON when `schema:` is set, matching 2.0's read-only String #content), `.tokens` is a
+      # real ::RubyLLM::Tokens (so `.input`/`.output`/`.cache_read`/`.cache_write` all resolve), and
+      # `.parsed` mirrors Message#parsed (memoized JSON.parse over #content).
+      StubMessage = Data.define(:content, :tokens, :model) do
+        def parsed
+          return if content.nil? || content.empty?
+
+          JSON.parse(content)
+        end
+      end
 
       # RubyLLM wraps HTTP-response-level provider errors (4xx/5xx) under RubyLLM::Error, but its
-      # non-HTTP errors (bad config, missing model/prompt/role, unsupported attachment) subclass
-      # StandardError directly -- so RubyLLM::Error alone misses them. Connection-level failures
-      # (timeout, DNS, refused) never reach RubyLLM at all and surface as raw Faraday errors. All
-      # three are "known" failure shapes safe to surface verbatim; anything outside this is a bug
-      # and must not leak its message into a user-facing result.
+      # non-HTTP errors (bad config, missing model/prompt/role, unsupported attachment, a stale model
+      # registry, an unresolved pending-tool-call/approval loop state) subclass StandardError
+      # directly -- so RubyLLM::Error alone misses them. Connection-level failures (timeout, DNS,
+      # refused) never reach RubyLLM at all and surface as raw Faraday errors. All these are "known"
+      # failure shapes safe to surface verbatim; anything outside this is a bug and must not leak its
+      # message into a user-facing result.
       KNOWN_ERROR_CLASSES = [
         ::RubyLLM::Error,
         ::Faraday::Error,
         ::RubyLLM::ConfigurationError,
         ::RubyLLM::ModelNotFoundError,
+        ::RubyLLM::ModelRegistryError,
         ::RubyLLM::PromptNotFoundError,
         ::RubyLLM::InvalidRoleError,
         ::RubyLLM::InvalidToolChoiceError,
+        ::RubyLLM::PendingToolCallsError,
+        ::RubyLLM::CancelledError,
         ::RubyLLM::UnsupportedAttachmentError,
       ].freeze
       KNOWN_ERROR = ->(exception:) { KNOWN_ERROR_CLASSES.any? { |k| exception.is_a?(k) } }
@@ -79,20 +92,20 @@ module Axn
         expose(
           response: parsed_response,
           raw_message: llm_response,
-          input_tokens: sum_across(:input_tokens),
-          output_tokens: sum_across(:output_tokens),
-          cache_read_tokens: sum_across(:cache_read_tokens),
-          cache_write_tokens: sum_across(:cache_write_tokens),
+          input_tokens: token_usage.input,
+          output_tokens: token_usage.output,
+          cache_read_tokens: token_usage.cache_read,
+          cache_write_tokens: token_usage.cache_write,
           prompt_tokens: total_input_tokens,
           cost_breakdown:,
           cost: cost_breakdown&.total,
           stubbed: false,
         )
         record_otel_attributes!(
-          input_tokens: sum_across(:input_tokens),
-          output_tokens: sum_across(:output_tokens),
+          input_tokens: token_usage.input,
+          output_tokens: token_usage.output,
           cost: cost_breakdown&.total,
-          response_model: response_message&.model_id,
+          response_model: llm_response&.model,
           stubbed: false,
         )
       rescue ::RubyLLM::RateLimitError => e
@@ -104,10 +117,12 @@ module Axn
       def disabled? = !Axn::RubyLLM.enabled?
 
       def stubbed_exposures
-        content = schema || json ? { "stubbed" => true } : "stubbed response value"
+        parsed_content = schema ? { "stubbed" => true } : nil
+        content = parsed_content ? parsed_content.to_json : "stubbed response value"
+        zero_tokens = ::RubyLLM::Tokens.new(input: 0, output: 0, cache_read: 0, cache_write: 0)
         {
-          response: content,
-          raw_message: StubMessage.new(content:, input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, model_id: "stubbed"),
+          response: parsed_content || content,
+          raw_message: StubMessage.new(content:, tokens: zero_tokens, model: "stubbed"),
           input_tokens: 0,
           output_tokens: 0,
           cache_read_tokens: 0,
@@ -120,105 +135,55 @@ module Axn
       end
 
       def parsed_response
-        return halted_response if halted?
+        return llm_response.content unless schema
 
-        if schema
-          # with_schema makes RubyLLM parse the response into a Hash on success
-          return llm_response.content if llm_response.content.is_a?(Hash)
+        # with_schema makes RubyLLM parse the response into JSON text on success; #parsed memoizes
+        # JSON.parse over #content and raises JSON::ParserError on malformed JSON (caught by the
+        # declared `error "Response was not valid JSON", if: JSON::ParserError` handler above).
+        parsed = llm_response.parsed
+        return parsed if parsed.is_a?(Hash)
 
-          fail! "Schema response was not valid JSON"
-        end
-        json ? JSON.parse(llm_response.content) : llm_response.content
+        fail! "Schema response was not valid JSON"
       end
 
-      # A halted tool (halt_after:) short-circuits the model's final turn, so with_schema/json never
-      # parsed a model response — the "response" is the tool's own payload (Halt#content). For a
-      # :structured tool that's JSON text, so parse it to honor the Hash contract a schema:/json:
-      # caller expects; fall back to the raw string for a :message tool or an unparseable payload.
-      def halted_response
-        content = llm_response.content
-        return content unless (schema || json) && content.is_a?(String)
+      # Every provider attempt this chat has made -- including retries and fallback attempts that
+      # produced no message -- aggregated by RubyLLM itself (Chat#tokens / Chat#cost), rather than
+      # summed by hand across chat.messages. A tool call makes multiple model round-trips inside one
+      # `ask`; this still reflects the whole call, not just the final response.
+      memo def token_usage = chat.tokens
+      memo def cost_breakdown = chat.cost
 
-        JSON.parse(content)
-      rescue JSON::ParserError
-        content
-      end
-
-      # A tool call makes multiple model round-trips inside one `ask`; every assistant turn is
-      # accumulated on the chat and reports its OWN usage, so sum across them for the true per-call
-      # totals rather than just the final turn's. Non-response messages (the user prompt, tool
-      # results) carry no tokens — they contribute 0 to the token sums, and RubyLLM::Cost.aggregate
-      # ignores them (no `tokens?`) — so summing over every message is correct, and a plain (no-tool)
-      # ask (one assistant turn) is a no-op.
-      def usage_messages
-        chat.messages
-      end
-
-      # nil only when NO turn reported the field (preserving the "nil if the provider didn't return it"
-      # contract); otherwise the summed count, treating a missing turn as 0.
-      def sum_across(field)
-        values = usage_messages.map(&field)
-        values.all?(&:nil?) ? nil : values.sum(&:to_i)
-      end
-
+      # nil only when NO turn reported the field (preserving the "nil if the provider didn't return
+      # it" contract); otherwise the summed count, treating a missing component as 0.
       def total_input_tokens
-        vals = usage_messages.flat_map { |m| [m.input_tokens, m.cache_read_tokens, m.cache_write_tokens] }
+        vals = [token_usage.input, token_usage.cache_read, token_usage.cache_write]
         vals.all?(&:nil?) ? nil : vals.sum(&:to_i)
-      end
-
-      memo def cost_breakdown
-        return nil unless model_info
-
-        # chat.messages always includes the user prompt (chat.ask appends it before completing) and,
-        # in a tool loop, the tool-result messages -- none of which carry token usage. Keep only the
-        # token-bearing (billable) costs BEFORE the one?-vs-aggregate decision: a normal single-turn
-        # call then preserves the response's OWN Cost (with its tokens/model) via costs.one?, instead
-        # of being forced through aggregate -- which returns a Cost with nil tokens/model -- by the
-        # ever-present user message. `select(&:tokens?)` mirrors Cost.aggregate's own billable filter,
-        # so the multi-turn total is unchanged.
-        costs = usage_messages.map { |message| message.cost(model: model_info) }.select(&:tokens?)
-        return nil if costs.empty?
-
-        # One billable turn → its own Cost (identical to the pre-tool-loop non-tool call). Multiple →
-        # RubyLLM::Cost.aggregate sums the per-tier costs into a single breakdown.
-        costs.one? ? costs.first : ::RubyLLM::Cost.aggregate(costs)
-      end
-
-      memo def model_info
-        return nil unless response_message&.model_id
-
-        ::RubyLLM.models.find(response_message.model_id)
-      rescue ::RubyLLM::ModelNotFoundError
-        nil
       end
 
       memo def llm_response = chat.ask(prompt)
 
-      # When a wrapped tool halts the loop (halt_after:), chat.ask returns a ::RubyLLM::Tool::Halt
-      # carrying the tool payload as #content, not a Message — and a Halt has no #model_id. Read the
-      # model (for cost lookup + OTel) from the last assistant turn accumulated on the chat in that
-      # case; for a normal response, llm_response IS that final message. Token/cost SUMS already read
-      # chat.messages, so only the model-id reads needed this indirection.
-      def response_message
-        return llm_response unless halted?
-
-        chat.messages.reverse.find { |message| message.role == :assistant }
-      end
-
-      def halted? = llm_response.is_a?(::RubyLLM::Tool::Halt)
-
       memo def chat
         ::RubyLLM.chat(model: resolved_model).tap do |c|
           c.with_instructions(system_prompt) if system_prompt
-          c.with_schema(schema) if schema
-          c.with_params(response_format: { type: "json_object" }) if json && !schema
-          c.with_params(temperature:) if temperature
+          c.with_schema(resolved_schema) if schema
+          c.with_temperature(temperature) if temperature
           c.with_tools(*resolved_tools) if resolved_tools.any?
         end
       end
 
       def resolved_model
         model || Axn::RubyLLM.config.default_model
+      end
+
+      # `schema:` accepts a raw JSON Schema Hash (passed through unchanged -- Chat#with_schema
+      # already normalizes a bare Hash), a Schematist::Schema class/instance (likewise passed
+      # through -- with_schema itself checks for #to_json_schema), or an Axn class: the same
+      # reflection the tool adapter already uses for input (`input_schema`), mirrored here for
+      # output. `output_schema` is axn's own public JSON Schema Hash for its `exposes` contract.
+      def resolved_schema
+        return schema unless schema.is_a?(::Class) && schema.respond_to?(:output_schema)
+
+        { name: schema.name || "response", schema: schema.output_schema }
       end
 
       # `tools:` accepts a mix of bare Axn classes (wrapped here, so callers can pass their own Axns
