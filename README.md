@@ -108,7 +108,7 @@ result = Axn::RubyLLM.ask(prompt: "...", schema: CompanyMatch)
 result.response # => { "company_id" => 42, "confidence" => 0.92, "reasoning" => "..." }
 ```
 
-This path always requests **non-strict** structured output (`strict: false`), regardless of RubyLLM's own strict-inference. OpenAI's strict mode requires `additionalProperties: false` on every object node or the request fails outright with a 400 `invalid_json_schema` — but axn's `exposes` contract makes no "no extra keys" guarantee, so `output_schema` never emits it. You still get the declared shape and required keys; you don't get OpenAI's "no extra keys" enforcement. Pass a `Schematist::Schema` (which does emit `additionalProperties: false`) instead if you need strict mode specifically.
+Two adjustments happen automatically here, both confirmed against real provider calls (Anthropic live; OpenAI by its documented contract): `additionalProperties: false` is injected on every fixed-shape object node — required unconditionally by Anthropic's structured output and by OpenAI's strict mode, and axn's `exposes` contract has no reason to emit it on its own — and `strict: false` is always sent, rather than left to RubyLLM's own strict-inference (which would otherwise turn on for the common case of every property being required). You get the declared shape, required keys, and "no extra keys" enforcement; you don't get OpenAI's *full* strict-mode guarantee, which additionally requires every property to appear in `required` — even conceptually optional ones, via a nullable type — which axn's reflection doesn't promise. Pass a `Schematist::Schema` instead if you need that.
 
 ### Token counts and cost
 

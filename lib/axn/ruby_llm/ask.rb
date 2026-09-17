@@ -181,19 +181,46 @@ module Axn
       # reflection the tool adapter already uses for input (`input_schema`), mirrored here for
       # output. `output_schema` is axn's own public JSON Schema Hash for its `exposes` contract.
       #
-      # `strict: false` is pinned deliberately, not left to RubyLLM's own inference. OpenAI's
-      # strict mode requires `additionalProperties: false` on every object node -- confirmed via
-      # OpenAI's docs and community reports, not just RubyLLM's source: omitting it fails the
-      # request with a 400 `invalid_json_schema`, it does not silently degrade -- but axn's
-      # `exposes` contract makes no such "no extra keys" guarantee, so `output_schema` never emits
-      # it. Chat#with_schema's own strict_schema? (chat_completions/chat.rb) infers `strict: true`
-      # whenever every property is required, which is the common case for an Axn's output contract
-      # (see the README example), so leaving `strict:` unset here would silently request strict
-      # mode on exactly the schemas that fail it.
+      # Two provider requirements axn's own `exposes` contract has no reason to satisfy on its
+      # own -- confirmed live against a real model, not just read off docs:
+      #
+      # - `additionalProperties: false` on every fixed-shape object node. Anthropic's
+      #   `output_config.format.schema` REQUIRES this unconditionally -- confirmed live
+      #   ("output_config.format.schema: For 'object' type, 'additionalProperties' must be
+      #   explicitly set to false"), and it deletes any `strict:` key before validating
+      #   (protocols/anthropic/chat.rb#build_output_config), so there is no "non-strict" escape
+      #   hatch there. OpenAI's strict mode has the same requirement (its own docs / community
+      #   reports). `add_additional_properties_false` injects it on every object node that
+      #   declares `properties` and has no `additionalProperties` of its own -- which excludes a
+      #   map (`type: Hash, of: {...}`), whose `additionalProperties` already names its value
+      #   schema and must stay that way.
+      # - `strict: false`, pinned rather than left to RubyLLM's own inference. Chat#with_schema's
+      #   strict_schema? (chat_completions/chat.rb) infers `strict: true` whenever every property
+      #   is required -- the common case for an Axn's output contract (see the README example) --
+      #   and OpenAI's *full* strict mode additionally requires every property to be listed in
+      #   `required` even when conceptually optional (via a nullable type), which axn's reflection
+      #   doesn't promise. Pinned rather than relying on the `additionalProperties: false` fix
+      #   above to make strict inference merely harmless.
       def resolved_schema
         return schema unless schema.is_a?(::Class) && schema.respond_to?(:output_schema)
 
-        { name: schema.name || "response", schema: schema.output_schema, strict: false }
+        { name: schema.name || "response", schema: add_additional_properties_false(schema.output_schema), strict: false }
+      end
+
+      # Builds a new Hash/Array throughout rather than mutating -- axn may hand back a memoized
+      # output_schema, and mutating it would corrupt every other reader.
+      def add_additional_properties_false(node)
+        case node
+        when Hash
+          rebuilt = node.transform_values { |value| add_additional_properties_false(value) }
+          object_node = rebuilt[:type] == "object" || Array(rebuilt[:type]).include?("object")
+          rebuilt[:additionalProperties] = false if object_node && rebuilt.key?(:properties) && !rebuilt.key?(:additionalProperties)
+          rebuilt
+        when Array
+          node.map { |value| add_additional_properties_false(value) }
+        else
+          node
+        end
       end
 
       # `tools:` accepts a mix of bare Axn classes (wrapped here, so callers can pass their own Axns

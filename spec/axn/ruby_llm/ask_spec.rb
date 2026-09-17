@@ -142,30 +142,84 @@ RSpec.describe Axn::RubyLLM::Ask do
       end
       let(:llm_response_content) { { "company_id" => 1, "confidence" => 0.5 }.to_json }
       let(:llm_response_parsed) { { "company_id" => 1, "confidence" => 0.5 } }
+      let(:expected_schema) { schema_class.output_schema.merge(additionalProperties: false) }
 
       before do
         allow(chat_instance).to receive(:with_schema)
-          .with(hash_including(schema: schema_class.output_schema))
+          .with(hash_including(schema: expected_schema))
           .and_return(chat_instance)
       end
 
       it "forwards the Axn class's output_schema, wrapped with a name" do
         expect(chat_instance).to receive(:with_schema)
-          .with(hash_including(schema: schema_class.output_schema))
+          .with(hash_including(schema: expected_schema))
           .and_return(chat_instance)
         expect(result).to be_ok
       end
 
       it "pins strict: false, rather than leaving it to RubyLLM's own inference" do
         # RubyLLM infers strict: true whenever every property is required (the common case for an
-        # Axn's exposed contract, as here) -- but axn's output_schema never emits the
-        # additionalProperties: false OpenAI's strict mode requires on every object node, so an
-        # unpinned schema would silently request strict mode on exactly the schemas that fail it
-        # (a 400 invalid_json_schema from OpenAI, confirmed against OpenAI's own docs).
+        # Axn's exposed contract, as here) -- but OpenAI's *full* strict mode additionally requires
+        # every property to be listed in `required` even when conceptually optional, which axn's
+        # reflection doesn't promise. Confirmed live against Anthropic that additionalProperties:
+        # false alone is not sufficient reason to also flip on strict inference here.
         expect(chat_instance).to receive(:with_schema)
           .with(hash_including(strict: false))
           .and_return(chat_instance)
         result
+      end
+
+      it "injects additionalProperties: false, which both OpenAI strict mode and Anthropic's " \
+         "structured output require unconditionally (confirmed live against a real Anthropic call)" do
+        expect(chat_instance).to receive(:with_schema)
+          .with(hash_including(schema: hash_including(additionalProperties: false)))
+          .and_return(chat_instance)
+        result
+      end
+
+      context "when the Axn exposes a nested fixed-shape object" do
+        let(:member) { Struct.new(:field, :validations) }
+        let(:schema_class) do
+          member_class = member
+          Class.new do
+            include Axn
+
+            exposes :address, type: Hash, shape: { members: [member_class.new(:street, { type: String })] }
+            def call; end
+          end
+        end
+        let(:llm_response_content) { { "address" => { "street" => "Main St" } }.to_json }
+        let(:llm_response_parsed) { { "address" => { "street" => "Main St" } } }
+
+        it "injects additionalProperties: false at every nested object level, not just the top" do
+          expect(chat_instance).to receive(:with_schema) do |payload|
+            expect(payload[:schema][:additionalProperties]).to eq(false)
+            expect(payload[:schema][:properties][:address][:additionalProperties]).to eq(false)
+            chat_instance
+          end
+          result
+        end
+      end
+
+      context "when the Axn exposes a map (Hash of:)" do
+        let(:schema_class) do
+          Class.new do
+            include Axn
+
+            exposes :scores, type: Hash, of: { keys: String, values: Integer }
+            def call; end
+          end
+        end
+        let(:llm_response_content) { { "scores" => { "a" => 1 } }.to_json }
+        let(:llm_response_parsed) { { "scores" => { "a" => 1 } } }
+
+        it "leaves a map's own additionalProperties (its value schema) untouched" do
+          expect(chat_instance).to receive(:with_schema) do |payload|
+            expect(payload[:schema][:properties][:scores][:additionalProperties]).to eq(type: "integer")
+            chat_instance
+          end
+          result
+        end
       end
     end
   end

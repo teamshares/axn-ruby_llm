@@ -34,11 +34,17 @@ replaces the previous `">= 1.15", "< 2.0"` floor, and 1.x is no longer supported
   request field in RubyLLM 2.0 (OpenAI's `response_format: {type: "json_object"}` is Chat
   Completions-only, and OpenAI now defaults to the Responses API). `schema:` is the replacement —
   it now additionally accepts a plain Hash (already supported, previously undocumented) or an Axn
-  class (new: forwards `axn_class.output_schema`), alongside a `Schematist::Schema`
-  class/instance. The Axn-class form always requests `strict: false`: OpenAI's strict mode requires
-  `additionalProperties: false` on every object node (confirmed against OpenAI's docs — a schema
-  missing it fails outright with a 400 `invalid_json_schema`, it does not silently degrade), and
-  axn's `output_schema` never emits it. Pass a `Schematist::Schema` instead if you need strict mode.
+  class (new: forwards `axn_class.output_schema`), alongside a `Schematist::Schema` class/instance.
+  The Axn-class form makes two adjustments axn's own `output_schema` has no reason to make on its
+  own, both confirmed against a real provider (Anthropic, live) rather than assumed from docs
+  alone: it injects `additionalProperties: false` on every fixed-shape object node — required
+  *unconditionally* by Anthropic's structured output (confirmed live: without it, the request
+  fails with `"For 'object' type, 'additionalProperties' must be explicitly set to false"`) and by
+  OpenAI's strict mode — while leaving a map's own `additionalProperties` (its value schema)
+  untouched; and it pins `strict: false`, since RubyLLM's own strict-inference would otherwise turn
+  on for the common case of every property being required, and OpenAI's *full* strict mode
+  additionally requires every property to appear in `required` even when conceptually optional,
+  which axn's reflection doesn't promise. Pass a `Schematist::Schema` instead if you need that.
 - **`RubyLLM::Schema` is `Schematist::Schema` in RubyLLM 2.0** — this gem does not shim the old
   name. Any `schema:` class you declare must subclass `Schematist::Schema`.
 - **`Axn::RubyLLM.configuration` / `.reset_configuration!` removed** — these were deprecated in
