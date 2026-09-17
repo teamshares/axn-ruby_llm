@@ -2,7 +2,7 @@
 
 Call LLMs from [Axn](https://github.com/teamshares/axn) actions using [RubyLLM](https://github.com/crmne/ruby_llm), with declarative error handling, schema-based structured output, configurable defaults, and cost/token tracking — and wrap any Axn as a `RubyLLM::Tool` a chat can call.
 
-> **RubyLLM 2.0 required.** This gem targets RubyLLM's 2.0 release-candidate line (`ruby_llm >= 2.0.0.rc4, < 3.0`) and is itself released as a prerelease (`0.3.0.rc1`) until RubyLLM 2.0.0 reaches GA. Both prereleases must be named explicitly in your `Gemfile` (`gem "ruby_llm", "2.0.0.rc4"`; `gem "axn-ruby_llm", "0.3.0.rc1"`) — an ordinary `bundle update` won't pick either up. See [CHANGELOG.md](CHANGELOG.md) for what changed from the 0.2.x / RubyLLM 1.x line.
+> **RubyLLM 2.0 required.** This gem targets RubyLLM's 2.0 release-candidate line (`ruby_llm >= 2.0.0.rc4, < 3.0`) and ships as a matching prerelease (`0.3.0.rc1`) itself, until RubyLLM 2.0.0 reaches GA. Both prereleases must be named explicitly in your `Gemfile` (`gem "ruby_llm", "2.0.0.rc4"`; `gem "axn-ruby_llm", "0.3.0.rc1"`) — an ordinary `bundle update` won't pick either up. See [CHANGELOG.md](CHANGELOG.md) for what changed from the 0.2.x / RubyLLM 1.x line.
 
 Part of the `axn-*` extension ecosystem — see also [axn-mcp](https://github.com/teamshares/axn-mcp).
 
@@ -100,7 +100,7 @@ Axn::RubyLLM.ask(prompt: "...", schema: { type: "object", properties: { answer: 
 class CompanyMatch
   include Axn
   exposes :company_id, type: Integer, allow_nil: true
-  exposes :confidence, type: Numeric
+  exposes :confidence, type: Float
   exposes :reasoning, type: String
 end
 
@@ -220,14 +220,14 @@ Pass `ambient_context:` to close over explicit caller context (e.g. `current_use
 Axn::RubyLLM.wrap(CreateWidget, ambient_context: { company_id: current_company.id })
 ```
 
-Passing `ambient_context:` returns a tool **instance** (closing over that context) rather than the tool class, since `chat.with_tool` accepts either.
+Passing `ambient_context:` returns a tool **instance** (closing over that context) rather than the tool class, since `chat.with_tools` accepts either.
 
 ### Using wrapped tools with RubyLLM directly
 
-`Axn::RubyLLM.ask(tools:)` covers the common single-call case. When you're driving `RubyLLM.chat` yourself — multi-turn conversations, streaming, or anything else beyond `ask` — register wrapped tools with RubyLLM's own `with_tool` / `with_tools`, which accept a `RubyLLM::Tool` class or instance:
+`Axn::RubyLLM.ask(tools:)` covers the common single-call case. When you're driving `RubyLLM.chat` yourself — multi-turn conversations, streaming, or anything else beyond `ask` — register wrapped tools with RubyLLM's own `with_tools`, which accepts one or many `RubyLLM::Tool` classes/instances:
 
 ```ruby
-chat = RubyLLM.chat.with_tool(Axn::RubyLLM.wrap(CreateWidget))
+chat = RubyLLM.chat.with_tools(Axn::RubyLLM.wrap(CreateWidget))
 chat.ask("Create a widget called Sprocket")
 
 # or register everything under the :ruby_llm adapter at once:

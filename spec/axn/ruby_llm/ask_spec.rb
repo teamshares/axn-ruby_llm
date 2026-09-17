@@ -136,7 +136,7 @@ RSpec.describe Axn::RubyLLM::Ask do
           include Axn
 
           exposes :company_id, type: Integer
-          exposes :confidence, type: Numeric
+          exposes :confidence, type: Float
           def call; end
         end
       end
