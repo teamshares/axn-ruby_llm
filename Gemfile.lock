@@ -2,7 +2,7 @@ PATH
   remote: .
   specs:
     axn-ruby_llm (0.3.0.rc1)
-      axn (>= 0.1.0.pre.alpha.6, < 0.2.0)
+      axn (>= 0.1.0.pre.alpha.6.1, < 0.2.0)
       faraday (>= 1.10.0)
       ruby_llm (>= 2.0.0.rc4, < 3.0)
 

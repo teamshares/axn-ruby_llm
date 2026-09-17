@@ -31,8 +31,10 @@ Gem::Specification.new do |spec|
 
   # PRO-2996: requires `Axn::Tools::AdapterSerialization` (`tool_roots_default`,
   # `declare_reject_opaque_exposed_values!`, `serialize_exposed`, `guard_tool_response`) and
-  # `Axn::Extensions::Tracing.annotate_span` (PRO-3278) -- both released in 0.1.0-alpha.6.
-  spec.add_dependency "axn", ">= 0.1.0-alpha.6", "< 0.2.0"
+  # `Axn::Extensions::Tracing.annotate_span` (PRO-3278) -- both released in 0.1.0-alpha.6. Floor
+  # bumped to the alpha.6.1 patch (no new API needed) to pick up its logger-raise best_effort
+  # hardening and model:/Result#declared_fields fixes.
+  spec.add_dependency "axn", ">= 0.1.0-alpha.6.1", "< 0.2.0"
   # PRO-3467: RubyLLM 2.0 is a breaking rewrite of the Tool DSL, error hierarchy, and token/cost
   # readers -- no code targets both 1.x and 2.x, so this is a hard cut. Pinned to the rc line
   # (rather than a bare `< 3.0` floor of 2.0) because this gem itself ships as 0.3.0.rc1 until

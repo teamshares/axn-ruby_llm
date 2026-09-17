@@ -65,6 +65,9 @@ replaces the previous `">= 1.15", "< 2.0"` floor, and 1.x is no longer supported
   provider unmodified.
 - **The gemspec now declares `faraday` directly** (previously arrived only transitively through
   `ruby_llm`), since `ask.rb` rescues `::Faraday::Error` directly.
+- **`axn` floor bumped to `0.1.0-alpha.6.1`** (from `0.1.0-alpha.6`). No new API is required — this
+  just picks up alpha.6.1's logger-raise `best_effort` hardening and `model:`/`Result#declared_fields`
+  fixes.
 
 ### Fixed
 
