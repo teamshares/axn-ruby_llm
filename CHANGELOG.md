@@ -1,19 +1,16 @@
 # Changelog
 
-## [Unreleased]
-
-Ships as `0.3.0.rc1` when released.
-
-**Targets `ruby_llm`'s 2.0 release-candidate line, not a stable release.** This gem is itself a
-prerelease and stays one until `ruby_llm` 2.0.0 reaches GA — both must be named explicitly in a
-`Gemfile` (`gem "ruby_llm", "2.0.0.rc4"`; `gem "axn-ruby_llm", "0.3.0.rc1"`), since an ordinary
-`bundle update` will not resolve either prerelease. A follow-up `0.3.0` final release will retarget
-`ruby_llm >= 2.0, < 3.0` once GA ships.
+## [0.3.0] - 2026-09-22
 
 RubyLLM 2.0 is a breaking rewrite (renamed Tool DSL, restructured error hierarchy, a usage ledger
 replacing per-message token/cost readers, `RubyLLM::Schema` moved to the separate `schematist` gem)
-with no compatibility shim for 1.x, so this is a hard cut: `ruby_llm ">= 2.0.0.rc4", "< 3.0"`
-replaces the previous `">= 1.15", "< 2.0"` floor, and 1.x is no longer supported by this gem.
+with no compatibility shim for 1.x, so this is a hard cut: `ruby_llm ">= 2.0", "< 3.0"` replaces the
+previous `">= 1.15", "< 2.0"` floor, and 1.x is no longer supported by this gem.
+
+This release was developed against ruby_llm's `2.0.0.rc4` release candidate (as `0.3.0.rc1`, never
+published as a final release) and raised to the `2.0.0` GA floor once RubyLLM released it
+(2026-09-18) — re-diffed first and confirmed every path this gem touches (`Tool`, the
+Gemini/Anthropic/Chat-Completions protocols) is byte-identical between rc4 and GA.
 
 ### Breaking
 
@@ -35,16 +32,33 @@ replaces the previous `">= 1.15", "< 2.0"` floor, and 1.x is no longer supported
   Completions-only, and OpenAI now defaults to the Responses API). `schema:` is the replacement —
   it now additionally accepts a plain Hash (already supported, previously undocumented) or an Axn
   class (new: forwards `axn_class.output_schema`), alongside a `Schematist::Schema` class/instance.
-  The Axn-class form makes two adjustments axn's own `output_schema` has no reason to make on its
-  own, both confirmed against a real provider (Anthropic, live) rather than assumed from docs
-  alone: it injects `additionalProperties: false` on every fixed-shape object node — required
-  *unconditionally* by Anthropic's structured output (confirmed live: without it, the request
-  fails with `"For 'object' type, 'additionalProperties' must be explicitly set to false"`) and by
-  OpenAI's strict mode — while leaving a map's own `additionalProperties` (its value schema)
-  untouched; and it pins `strict: false`, since RubyLLM's own strict-inference would otherwise turn
-  on for the common case of every property being required, and OpenAI's *full* strict mode
-  additionally requires every property to appear in `required` even when conceptually optional,
-  which axn's reflection doesn't promise. Pass a `Schematist::Schema` instead if you need that.
+  The Axn-class form makes adjustments axn's own `output_schema` has no reason to make on its own,
+  each confirmed against a real provider (Anthropic, live) rather than assumed from docs alone
+  (which turned out unreliable on this point — a docs summary claimed `minLength` was also
+  unsupported by Anthropic; a flat schema with `minLength: 1` on a String field succeeded live
+  regardless, so only what's actually confirmed failing is adjusted):
+  - Injects `additionalProperties: false` on every fixed-shape object node — required
+    *unconditionally* by Anthropic's structured output (confirmed live: without it, the request
+    fails with `"For 'object' type, 'additionalProperties' must be explicitly set to false"`) and
+    by OpenAI's strict mode — while leaving a map's own `additionalProperties` (its value schema)
+    untouched.
+  - Strips `minProperties`/`maxProperties` from every object node — axn emits `minProperties: 1`
+    by default on a nested fixed-shape `Hash` field, and Anthropic's schema validator rejects it
+    outright (confirmed live: `"For 'object' type, property 'minProperties' is not supported"`).
+  - Pins `strict: false`, since RubyLLM's own strict-inference would otherwise turn on for the
+    common case of every property being required, and OpenAI's *full* strict mode additionally
+    requires every property to appear in `required` even when conceptually optional, which axn's
+    reflection doesn't promise.
+
+  **Known limitation, confirmed live, not worked around:** a `Hash` map field (`type: Hash, of:
+  {...}`) doesn't survive this path against every provider. Anthropic's structured output rejects
+  `additionalProperties` set to anything but the literal `false` (confirmed live:
+  `"'additionalProperties: object' is not supported. Please set 'additionalProperties' to false"`),
+  and OpenAI's strict mode has the same restriction by design — neither provider's structured-output
+  feature represents dynamic/arbitrary keys, only a fixed shape, so there's no schema-legal way to
+  route around it. Use a fixed-shape `Hash` (`shape:`) instead, or pass your own schema for that
+  provider if you specifically need a map. Pass a `Schematist::Schema` instead of an Axn class if you
+  need OpenAI's *full* strict-mode guarantee.
 - **`RubyLLM::Schema` is `Schematist::Schema` in RubyLLM 2.0** — this gem does not shim the old
   name. Any `schema:` class you declare must subclass `Schematist::Schema`.
 - **`Axn::RubyLLM.configuration` / `.reset_configuration!` removed** — these were deprecated in

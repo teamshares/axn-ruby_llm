@@ -36,10 +36,12 @@ Gem::Specification.new do |spec|
   # hardening and model:/Result#declared_fields fixes.
   spec.add_dependency "axn", ">= 0.1.0-alpha.6.1", "< 0.2.0"
   # PRO-3467: RubyLLM 2.0 is a breaking rewrite of the Tool DSL, error hierarchy, and token/cost
-  # readers -- no code targets both 1.x and 2.x, so this is a hard cut. Pinned to the rc line
-  # (rather than a bare `< 3.0` floor of 2.0) because this gem itself ships as 0.3.0.rc1 until
-  # ruby_llm reaches 2.0.0 GA; see CHANGELOG.
-  spec.add_dependency "ruby_llm", ">= 2.0.0.rc4", "< 3.0"
+  # readers -- no code targets both 1.x and 2.x, so this is a hard cut. Was pinned to the rc4 line
+  # while this gem itself shipped as 0.3.0.rc1; raised to the 2.0.0 GA floor once RubyLLM released
+  # it (2026-09-18) -- re-diffed rc4 against 2.0.0 first and confirmed every path this gem touches
+  # (Tool, the Gemini/Anthropic/Chat-Completions protocols) is byte-identical between the two; see
+  # CHANGELOG.
+  spec.add_dependency "ruby_llm", ">= 2.0", "< 3.0"
   # ask.rb rescues ::Faraday::Error directly (a connection-level failure never reaches RubyLLM's own
   # error wrapping); previously arrived only transitively through ruby_llm. Matches ruby_llm's own
   # floor (its gemspec declares `>= 1.10.0` with no upper bound) rather than adding a narrower one.

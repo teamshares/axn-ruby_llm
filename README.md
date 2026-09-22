@@ -2,7 +2,7 @@
 
 Call LLMs from [Axn](https://github.com/teamshares/axn) actions using [RubyLLM](https://github.com/crmne/ruby_llm), with declarative error handling, schema-based structured output, configurable defaults, and cost/token tracking — and wrap any Axn as a `RubyLLM::Tool` a chat can call.
 
-> **RubyLLM 2.0 required.** This gem targets RubyLLM's 2.0 release-candidate line (`ruby_llm >= 2.0.0.rc4, < 3.0`) and ships as a matching prerelease (`0.3.0.rc1`) itself, until RubyLLM 2.0.0 reaches GA. Both prereleases must be named explicitly in your `Gemfile` (`gem "ruby_llm", "2.0.0.rc4"`; `gem "axn-ruby_llm", "0.3.0.rc1"`) — an ordinary `bundle update` won't pick either up. See [CHANGELOG.md](CHANGELOG.md) for what changed from the 0.2.x / RubyLLM 1.x line.
+> **RubyLLM 2.0 required.** As of `0.3.0`, this gem requires `ruby_llm >= 2.0, < 3.0` and no longer supports RubyLLM 1.x — see [CHANGELOG.md](CHANGELOG.md) for the full breaking-change rundown if you're upgrading from an earlier `axn-ruby_llm` release.
 
 Part of the `axn-*` extension ecosystem — see also [axn-mcp](https://github.com/teamshares/axn-mcp).
 
@@ -108,7 +108,15 @@ result = Axn::RubyLLM.ask(prompt: "...", schema: CompanyMatch)
 result.response # => { "company_id" => 42, "confidence" => 0.92, "reasoning" => "..." }
 ```
 
-Two adjustments happen automatically here, both confirmed against real provider calls (Anthropic live; OpenAI by its documented contract): `additionalProperties: false` is injected on every fixed-shape object node — required unconditionally by Anthropic's structured output and by OpenAI's strict mode, and axn's `exposes` contract has no reason to emit it on its own — and `strict: false` is always sent, rather than left to RubyLLM's own strict-inference (which would otherwise turn on for the common case of every property being required). You get the declared shape, required keys, and "no extra keys" enforcement; you don't get OpenAI's *full* strict-mode guarantee, which additionally requires every property to appear in `required` — even conceptually optional ones, via a nullable type — which axn's reflection doesn't promise. Pass a `Schematist::Schema` instead if you need that.
+A few adjustments happen automatically here, confirmed against real provider calls (Anthropic live; OpenAI by its documented contract):
+
+- `additionalProperties: false` is injected on every fixed-shape object node — required unconditionally by Anthropic's structured output and by OpenAI's strict mode, and axn's `exposes` contract has no reason to emit it on its own.
+- `minProperties`/`maxProperties` are stripped — axn emits `minProperties: 1` by default on a nested fixed-shape `Hash` field, and Anthropic's schema validator rejects it outright (confirmed live).
+- `strict: false` is always sent, rather than left to RubyLLM's own strict-inference (which would otherwise turn on for the common case of every property being required).
+
+You get the declared shape, required keys, and "no extra keys" enforcement; you don't get OpenAI's *full* strict-mode guarantee, which additionally requires every property to appear in `required` — even conceptually optional ones, via a nullable type — which axn's reflection doesn't promise. Pass a `Schematist::Schema` instead if you need that.
+
+> **A `Hash` map field (`type: Hash, of: {...}`) doesn't survive this path against every provider.** Confirmed live: Anthropic's structured output rejects `additionalProperties` set to anything but the literal `false` (`"additionalProperties: object' is not supported. Please set 'additionalProperties' to false"`), and OpenAI's strict mode has the same restriction by design — neither provider's structured-output feature represents dynamic/arbitrary keys, only a fixed shape. This isn't something the adapter can paper over (there's no schema-legal way to say "arbitrary keys, but still typed" in either provider's strict mode), so a map field is left as-is and the provider's own rejection surfaces as the request's error. Use a fixed-shape `Hash` (`shape:`) instead, or pass your own schema Hash / `Schematist::Schema` if you specifically need a map with that provider.
 
 ### Token counts and cost
 

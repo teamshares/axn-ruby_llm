@@ -199,6 +199,21 @@ RSpec.describe Axn::RubyLLM::Ask do
           end
           result
         end
+
+        it "strips minProperties at every nested object level -- Anthropic rejects it outright " \
+           "(confirmed live: \"output_config.format.schema: For 'object' type, property " \
+           "'minProperties' is not supported\")" do
+          # axn emits minProperties: 1 by default on a fixed-shape Hash field (the nested
+          # non-blank-by-default contract), which is what surfaced this live.
+          expect(schema_class.output_schema.dig(:properties, :address, :minProperties)).to eq(1)
+
+          expect(chat_instance).to receive(:with_schema) do |payload|
+            expect(payload[:schema]).not_to have_key(:minProperties)
+            expect(payload[:schema][:properties][:address]).not_to have_key(:minProperties)
+            chat_instance
+          end
+          result
+        end
       end
 
       context "when the Axn exposes a map (Hash of:)" do

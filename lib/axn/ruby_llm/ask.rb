@@ -181,8 +181,11 @@ module Axn
       # reflection the tool adapter already uses for input (`input_schema`), mirrored here for
       # output. `output_schema` is axn's own public JSON Schema Hash for its `exposes` contract.
       #
-      # Two provider requirements axn's own `exposes` contract has no reason to satisfy on its
-      # own -- confirmed live against a real model, not just read off docs:
+      # Adjustments axn's own `exposes` contract has no reason to make on its own -- each one
+      # confirmed live against a real model, not just read off docs (a docs summary claimed
+      # `minLength` was ALSO unsupported by Anthropic; a flat schema with `minLength: 1` on a
+      # String field succeeded live regardless, so only what's actually confirmed failing is
+      # stripped, nothing broader):
       #
       # - `additionalProperties: false` on every fixed-shape object node. Anthropic's
       #   `output_config.format.schema` REQUIRES this unconditionally -- confirmed live
@@ -190,10 +193,17 @@ module Axn
       #   explicitly set to false"), and it deletes any `strict:` key before validating
       #   (protocols/anthropic/chat.rb#build_output_config), so there is no "non-strict" escape
       #   hatch there. OpenAI's strict mode has the same requirement (its own docs / community
-      #   reports). `add_additional_properties_false` injects it on every object node that
-      #   declares `properties` and has no `additionalProperties` of its own -- which excludes a
-      #   map (`type: Hash, of: {...}`), whose `additionalProperties` already names its value
-      #   schema and must stay that way.
+      #   reports). Injected on every object node that declares `properties` and has no
+      #   `additionalProperties` of its own -- which excludes a map (`type: Hash, of: {...}`),
+      #   whose `additionalProperties` already names its value schema and must stay that way.
+      # - `minProperties`/`maxProperties` stripped from every object node. axn emits
+      #   `minProperties: 1` on any fixed-shape object (a nested `type: Hash, shape: {...}` field,
+      #   or a map) by default -- Anthropic's schema validator rejects it outright, confirmed live
+      #   ("output_config.format.schema: For 'object' type, property 'minProperties' is not
+      #   supported"). No prose-restatement fallback (the kind PRO-3172's now-deleted Gemini
+      #   workaround used) -- that machinery existed for a fixed-whitelist converter Gemini no
+      #   longer has (see tool_adapter.rb); reintroducing it here for a narrower, less common case
+      #   (a nested fixed-shape object's entry-count bound) isn't worth the complexity back.
       # - `strict: false`, pinned rather than left to RubyLLM's own inference. Chat#with_schema's
       #   strict_schema? (chat_completions/chat.rb) infers `strict: true` whenever every property
       #   is required -- the common case for an Axn's output contract (see the README example) --
@@ -204,20 +214,22 @@ module Axn
       def resolved_schema
         return schema unless schema.is_a?(::Class) && schema.respond_to?(:output_schema)
 
-        { name: schema.name || "response", schema: add_additional_properties_false(schema.output_schema), strict: false }
+        { name: schema.name || "response", schema: sanitize_output_schema(schema.output_schema), strict: false }
       end
 
       # Builds a new Hash/Array throughout rather than mutating -- axn may hand back a memoized
       # output_schema, and mutating it would corrupt every other reader.
-      def add_additional_properties_false(node)
+      def sanitize_output_schema(node)
         case node
         when Hash
-          rebuilt = node.transform_values { |value| add_additional_properties_false(value) }
+          rebuilt = node.transform_values { |value| sanitize_output_schema(value) }
+          rebuilt.delete(:minProperties)
+          rebuilt.delete(:maxProperties)
           object_node = rebuilt[:type] == "object" || Array(rebuilt[:type]).include?("object")
           rebuilt[:additionalProperties] = false if object_node && rebuilt.key?(:properties) && !rebuilt.key?(:additionalProperties)
           rebuilt
         when Array
-          node.map { |value| add_additional_properties_false(value) }
+          node.map { |value| sanitize_output_schema(value) }
         else
           node
         end
