@@ -236,6 +236,36 @@ RSpec.describe Axn::RubyLLM::Ask do
           result
         end
       end
+
+      context "when the Axn exposes a field literally named minProperties" do
+        # Codex review catch: the recursive schema pass walks every Hash, but the `properties`
+        # container is a name-to-schema MAP, not a schema node -- it never carries `type`. An
+        # ungated delete treated a field literally named `minProperties` as the schema keyword and
+        # dropped it from `properties` entirely, while `required` still named it: an invalid
+        # schema. Confirmed live before the fix.
+        let(:schema_class) do
+          Class.new do
+            include Axn
+
+            exposes :minProperties, type: Integer
+            exposes :other, type: String
+            def call; end
+          end
+        end
+        let(:llm_response_content) { { "minProperties" => 3, "other" => "x" }.to_json }
+        let(:llm_response_parsed) { { "minProperties" => 3, "other" => "x" } }
+
+        it "preserves the field instead of treating its name as the schema keyword" do
+          expect(chat_instance).to receive(:with_schema) do |payload|
+            props = payload[:schema][:properties]
+            expect(props).to have_key(:minProperties)
+            expect(props[:minProperties]).to eq(type: "integer")
+            expect(payload[:schema][:required]).to include("minProperties")
+            chat_instance
+          end
+          result
+        end
+      end
     end
   end
 

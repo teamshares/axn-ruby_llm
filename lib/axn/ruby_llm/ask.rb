@@ -219,14 +219,26 @@ module Axn
 
       # Builds a new Hash/Array throughout rather than mutating -- axn may hand back a memoized
       # output_schema, and mutating it would corrupt every other reader.
+      #
+      # Every adjustment is gated on `object_node` -- the recursion walks every Hash in the
+      # schema, but not every Hash IS a schema node. `properties` is a name-to-schema map, so an
+      # Axn with a field literally named `minProperties`/`maxProperties`/`additionalProperties`
+      # puts a Hash at exactly the key this pass reads; an ungated delete/injection would corrupt
+      # that container instead of a schema node's own keywords (confirmed live: an Axn exposing
+      # `minProperties` had that field silently dropped from `properties` while `required` still
+      # named it -- an invalid schema). The `properties` container itself never carries `type`, so
+      # gating on `object_node` -- true only for an actual object-schema node -- keeps the pass off
+      # it entirely.
       def sanitize_output_schema(node)
         case node
         when Hash
           rebuilt = node.transform_values { |value| sanitize_output_schema(value) }
-          rebuilt.delete(:minProperties)
-          rebuilt.delete(:maxProperties)
           object_node = rebuilt[:type] == "object" || Array(rebuilt[:type]).include?("object")
-          rebuilt[:additionalProperties] = false if object_node && rebuilt.key?(:properties) && !rebuilt.key?(:additionalProperties)
+          if object_node
+            rebuilt.delete(:minProperties)
+            rebuilt.delete(:maxProperties)
+            rebuilt[:additionalProperties] = false if rebuilt.key?(:properties) && !rebuilt.key?(:additionalProperties)
+          end
           rebuilt
         when Array
           node.map { |value| sanitize_output_schema(value) }

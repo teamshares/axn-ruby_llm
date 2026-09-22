@@ -42,9 +42,14 @@ Gemini/Anthropic/Chat-Completions protocols) is byte-identical between rc4 and G
     fails with `"For 'object' type, 'additionalProperties' must be explicitly set to false"`) and
     by OpenAI's strict mode — while leaving a map's own `additionalProperties` (its value schema)
     untouched.
-  - Strips `minProperties`/`maxProperties` from every object node — axn emits `minProperties: 1`
-    by default on a nested fixed-shape `Hash` field, and Anthropic's schema validator rejects it
-    outright (confirmed live: `"For 'object' type, property 'minProperties' is not supported"`).
+  - Strips `minProperties`/`maxProperties` from every object *schema node* — axn emits
+    `minProperties: 1` by default on a nested fixed-shape `Hash` field, and Anthropic's schema
+    validator rejects it outright (confirmed live: `"For 'object' type, property 'minProperties' is
+    not supported"`). Gated on the node actually being an object schema (declaring `type`), not on
+    the key name alone — a code-review catch: the recursive pass walks every Hash in the schema,
+    but `properties` is a name-to-schema *map*, so an Axn exposing a field literally named
+    `minProperties` would otherwise have that field silently dropped while `required` still named
+    it, producing an invalid schema (confirmed live before the fix).
   - Pins `strict: false`, since RubyLLM's own strict-inference would otherwise turn on for the
     common case of every property being required, and OpenAI's *full* strict mode additionally
     requires every property to appear in `required` even when conceptually optional, which axn's
