@@ -1,6 +1,8 @@
 # axn-ruby_llm
 
-Call LLMs from [Axn](https://github.com/teamshares/axn) actions using [RubyLLM](https://github.com/crmne/ruby_llm), with declarative error handling, optional JSON mode, configurable defaults, and cost/token tracking — and wrap any Axn as a `RubyLLM::Tool` a chat can call.
+Call LLMs from [Axn](https://github.com/teamshares/axn) actions using [RubyLLM](https://github.com/crmne/ruby_llm), with declarative error handling, schema-based structured output, configurable defaults, and cost/token tracking — and wrap any Axn as a `RubyLLM::Tool` a chat can call.
+
+> **RubyLLM 2.0 required.** As of `0.3.0`, this gem requires `ruby_llm >= 2.0, < 3.0` and no longer supports RubyLLM 1.x — see [CHANGELOG.md](CHANGELOG.md) for the full breaking-change rundown if you're upgrading from an earlier `axn-ruby_llm` release.
 
 Part of the `axn-*` extension ecosystem — see also [axn-mcp](https://github.com/teamshares/axn-mcp).
 
@@ -12,7 +14,7 @@ Four things you'd otherwise hand-build:
 
 2. **Production gating.** A single `c.enabled = -> { Rails.env.production? }` in an initializer stubs every LLM call in non-prod environments — no per-callsite guards needed. The stub is typed (`stubbed: true`, `input_tokens: 0`, etc.) so downstream code doesn't need to branch on it either.
 
-3. **Cost/token tracking, exposed automatically.** Every call exposes `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `prompt_tokens` (the total), `cost`, and `cost_breakdown` without you doing the `RubyLLM.models.find` lookup manually. If your app uses OpenTelemetry, these values are also set as attributes on the existing `axn.call` span — no configuration required.
+3. **Cost/token tracking, exposed automatically.** Every call exposes `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `prompt_tokens` (the total), `cost`, and `cost_breakdown`, read straight off RubyLLM's own usage ledger (`Chat#tokens` / `Chat#cost`) — no manual model lookup, and a tool-call loop's retries and multiple round-trips are already aggregated for you. If your app uses OpenTelemetry, these values are also set as attributes on the existing `axn.call` span — no configuration required.
 
 4. **Author-once tools.** `Axn::RubyLLM.wrap` turns any Axn into a `RubyLLM::Tool` your chat can call — reuse the same Axn classes you already expose through [axn-mcp](https://github.com/teamshares/axn-mcp), or plain Axns, with no rewrite. The tool's name, JSON Schema, and argument validation all come from the Axn's own contract.
 
@@ -52,13 +54,6 @@ result = Axn::RubyLLM.ask(
 )
 result.response  # => "The team decided to..."
 
-# JSON mode
-result = Axn::RubyLLM.ask(
-  prompt: build_extraction_prompt(doc),
-  json: true
-)
-result.response  # => { "company" => "Acme", "founded" => 1999 }
-
 # With system prompt and model override
 result = Axn::RubyLLM.ask(
   prompt: user_message,
@@ -71,10 +66,14 @@ result = Axn::RubyLLM.ask(
 
 ### Structured output via schema
 
-Pass `schema:` to enable provider-enforced structured output (e.g. OpenAI strict mode) via `RubyLLM::Chat#with_schema`. The result's `response` is the parsed Hash.
+Pass `schema:` to enable provider-enforced structured output (e.g. OpenAI strict mode) via `RubyLLM::Chat#with_schema`. The result's `response` is the parsed Hash — read via `RubyLLM::Message#parsed` under the hood, not `#content` (which is now always the raw JSON text).
+
+`schema:` accepts any of three forms:
+
+**A [`Schematist::Schema`](https://github.com/crmne/schematist) class or instance** — anything `RubyLLM::Chat#with_schema` itself accepts:
 
 ```ruby
-class CompanyMatch < RubyLLM::Schema
+class CompanyMatch < Schematist::Schema
   integer :company_id, description: "ID of the matched company, or null"
   number :confidence, description: "0.0–1.0"
   string :reasoning
@@ -87,11 +86,41 @@ result = Axn::RubyLLM.ask(
 result.response # => { "company_id" => 42, "confidence" => 0.92, "reasoning" => "..." }
 ```
 
-`schema:` accepts a [`ruby_llm-schema`](https://github.com/crmne/ruby_llm-schema) class or instance — anything `RubyLLM::Chat#with_schema` accepts, including a raw JSON Schema hash. The `ruby_llm-schema` gem is recommended but not required; declare it in your own Gemfile if you want the DSL. When `schema:` is set, `json: true` is ignored.
+The `schematist` gem (installed automatically by RubyLLM 2.0) is recommended but not required; declare it in your own Gemfile if you want the DSL.
+
+**A raw JSON Schema Hash**, passed straight through unchanged:
+
+```ruby
+Axn::RubyLLM.ask(prompt: "...", schema: { type: "object", properties: { answer: { type: "string" } } })
+```
+
+**An Axn class**, via its own `output_schema` reflection — the same contract you'd already write with `exposes`, no separate schema to maintain:
+
+```ruby
+class CompanyMatch
+  include Axn
+  exposes :company_id, type: Integer, allow_nil: true
+  exposes :confidence, type: Float
+  exposes :reasoning, type: String
+end
+
+result = Axn::RubyLLM.ask(prompt: "...", schema: CompanyMatch)
+result.response # => { "company_id" => 42, "confidence" => 0.92, "reasoning" => "..." }
+```
+
+A few adjustments happen automatically here, confirmed against real provider calls (Anthropic live; OpenAI by its documented contract):
+
+- `additionalProperties: false` is injected on every fixed-shape object node — required unconditionally by Anthropic's structured output and by OpenAI's strict mode, and axn's `exposes` contract has no reason to emit it on its own.
+- `minProperties`/`maxProperties` are stripped — axn emits `minProperties: 1` by default on a nested fixed-shape `Hash` field, and Anthropic's schema validator rejects it outright (confirmed live).
+- `strict: false` is always sent, rather than left to RubyLLM's own strict-inference (which would otherwise turn on for the common case of every property being required).
+
+You get the declared shape, required keys, and "no extra keys" enforcement; you don't get OpenAI's *full* strict-mode guarantee, which additionally requires every property to appear in `required` — even conceptually optional ones, via a nullable type — which axn's reflection doesn't promise. Pass a `Schematist::Schema` instead if you need that.
+
+> **A `Hash` map field (`type: Hash, of: {...}`) doesn't survive this path against every provider.** Confirmed live: Anthropic's structured output rejects `additionalProperties` set to anything but the literal `false` (`"additionalProperties: object' is not supported. Please set 'additionalProperties' to false"`), and OpenAI's strict mode has the same restriction by design — neither provider's structured-output feature represents dynamic/arbitrary keys, only a fixed shape. This isn't something the adapter can paper over (there's no schema-legal way to say "arbitrary keys, but still typed" in either provider's strict mode), so a map field is left as-is and the provider's own rejection surfaces as the request's error. Use a fixed-shape `Hash` (`shape:`) instead, or pass your own schema Hash / `Schematist::Schema` if you specifically need a map with that provider.
 
 ### Token counts and cost
 
-Every successful result exposes token usage and cost:
+Every successful result exposes token usage and cost, read off RubyLLM's own usage ledger (`Chat#tokens` / `Chat#cost`) — which already sums every provider attempt for the call, including a tool loop's multiple round-trips and any retries:
 
 ```ruby
 result = Axn::RubyLLM.ask(prompt: "...")
@@ -103,14 +132,14 @@ result.prompt_tokens      # => 512  (input_tokens + cache_read_tokens + cache_wr
 result.output_tokens      # => 78
 result.cost               # => 0.00056 (Float USD total; nil if RubyLLM has no pricing for the model)
 
-# Full breakdown — RubyLLM::Cost struct with per-tier pricing
+# Full breakdown — RubyLLM::Cost, RubyLLM's own aggregated-cost object
 result.cost_breakdown  # => #<Cost input: 0.0004, output: 0.00016, cache_read: 0.0, ..., total: 0.00056>
 
 # Raw RubyLLM::Message for thinking tokens, raw provider data, etc.
 result.raw_message     # => #<RubyLLM::Message ...>
 ```
 
-`cost` and `cost_breakdown` are both `nil` when RubyLLM lacks pricing for the model (e.g. unknown/custom endpoints). Token counts are nil only if the provider did not return them. `prompt_tokens` is nil only if all three input token fields are nil.
+`cost` is `nil` when RubyLLM lacks pricing for the model (e.g. unknown/custom endpoints); `cost_breakdown` itself is still a `Cost` object in that case (only its component readers are `nil`). Token counts are nil only if the provider did not return them. `prompt_tokens` is nil only if all three input token fields are nil.
 
 ### Errors
 
@@ -119,8 +148,8 @@ Errors are handled via Axn's declarative `error` DSL. Every failure shares a con
 - `RubyLLM::RateLimitError` (HTTP 429, provider-agnostic) → `"LLM request failed: Rate limit reached: <message>"`
 - `RubyLLM::OverloadedError` / `ServiceUnavailableError` / `ServerError` (5xx, transient) → `"LLM request failed: Provider temporarily unavailable, try again later: <message>"`
 - `RubyLLM::ContextLengthExceededError` → `"LLM request failed: Prompt exceeds the model's context window: <message>"` (message retains the provider's token counts)
-- `schema:` set but LLM returned non-JSON → `"LLM request failed: Schema response was not valid JSON"`
-- Any other known RubyLLM error — `RubyLLM::Error` (auth, bad request, payment, etc.), `RubyLLM::ConfigurationError`, `ModelNotFoundError`, `PromptNotFoundError`, `InvalidRoleError`, `InvalidToolChoiceError`, `UnsupportedAttachmentError` — or `Faraday::Error` (network/transport failure) → `"LLM request failed: <message>"`
+- `schema:` set but LLM returned non-JSON, or valid JSON that isn't an object → `"LLM request failed: Response was not valid JSON"` (malformed JSON text) or `"LLM request failed: Schema response was not valid JSON"` (valid JSON, wrong shape)
+- Any other known RubyLLM error — `RubyLLM::Error` (auth, bad request, payment, etc.), `RubyLLM::ConfigurationError`, `ModelNotFoundError`, `ModelRegistryError`, `PromptNotFoundError`, `InvalidRoleError`, `InvalidToolChoiceError`, `PendingToolCallsError`, `CancelledError`, `UnsupportedAttachmentError` — or `Faraday::Error` (network/transport failure) → `"LLM request failed: <message>"`
 - Any other `StandardError` (i.e. not a recognized RubyLLM/network failure — most likely a bug) → `"LLM request failed"`, with no exception detail leaked into the message
 
 ## Tool adapter — wrap any Axn as a RubyLLM::Tool
@@ -153,20 +182,19 @@ result.response # => "Created widget Sprocket (id: 42)."
 
 `tools:` accepts a mix of **bare Axn classes** (wrapped automatically) and **already-wrapped tools** from `Axn::RubyLLM.wrap` (a class, or an instance that closed over `ambient_context:` — see below). Pass `tools: Axn::RubyLLM.tools` to expose everything registered under the `:ruby_llm` adapter (see [Enumerating tools](#enumerating-tools-from-the-registry)). The same Axn classes you expose through [axn-mcp](https://github.com/teamshares/axn-mcp) work here unchanged.
 
-> **Token/cost in a tool loop:** a tool call makes multiple model round-trips inside one `ask`. The token counts, `cost`, and `cost_breakdown` are **summed across every turn**, so they reflect the whole call — not just the final response. (`raw_message` is still the final response.)
+> **Token/cost in a tool loop:** a tool call makes multiple model round-trips inside one `ask`. The token counts, `cost`, and `cost_breakdown` come from RubyLLM's own usage ledger (`Chat#tokens` / `Chat#cost`), which already aggregates **every turn** — so they reflect the whole call, not just the final response. (`raw_message` is still the final response.)
 
 `Axn::RubyLLM.wrap` is also available directly if you're driving `RubyLLM.chat` yourself rather than going through `ask` — see [Using wrapped tools with RubyLLM directly](#using-wrapped-tools-with-rubyllm-directly).
 
 The tool's name, description, and JSON Schema parameters come straight from the Axn's own contract — the same `description`/`expects`/`exposes` you'd write for any Axn — so a minimal class just works (the tool name defaults from the class name: `CreateWidget` → `create_widget`). Arguments the model supplies are run through axn core's tool `Invoker`: wire types are coerced, and any contract violation — a missing required field, an out-of-schema argument, a wrong type, or a value outside an `inclusion` set (validated at **full depth**, not just the top-level type) — comes back to the model as a clean, correctable `{ error: "Invalid tool arguments: <reason>" }`, and does **not** page `on_exception` as though it were a bug. A model-supplied `ambient_context` is stripped before the Axn runs, so a prompt-injected context can never override the caller's — the wrap's own `ambient_context:` (below) is injected instead. The `Invoker` also stamps every call (including any nested sub-Axn) with the `invoked_via: :ruby_llm` dimension, so a Datadog dashboard can query tool-driven traffic separately from ordinary direct `.call`s — see [OpenTelemetry](#opentelemetry) below.
 
-On success, `execute` returns the exposed values (via `Axn::RubyLLM.serialize_exposed`, honoring `reject_opaque_exposed_values` — see below) as a JSON **string**, not a Hash — `RubyLLM::Chat#handle_tool_calls` only passes a `Content`/`Content::Raw` return through as-is, and otherwise sends `tool_payload.to_s`, which for a Hash produces Ruby's inspect syntax rather than JSON; on failure, `{ error: result.error }`. The same `CreateWidget` class can be wrapped for other transports (e.g. `Axn::MCP.wrap`) with no changes — the contract is declared once.
+On success, `execute` returns the exposed values (via `Axn::RubyLLM.serialize_exposed`, honoring `reject_opaque_exposed_values` — see below) as a JSON **string**, not a Hash — `RubyLLM::Tool.split_result` sends a returned String through as-is, but a returned Hash/Array is `#to_json`'d via Ruby's own dispatch, which may not match axn's own serialization contract (Symbol keys/values, `BigDecimal`, `Time`, opaque-value rejection); serializing ourselves keeps the wire form aligned with what `output_schema` advertises. On failure, `{ error: result.error }`. The same `CreateWidget` class can be wrapped for other transports (e.g. `Axn::MCP.wrap`) with no changes — the contract is declared once.
 
 Options, settable either per-call via `wrap` keywords or once on the Axn via axn's namespaced per-class `configure(:ruby_llm) { |c| ... }` (a `wrap` keyword wins when both are present, then the class-level `configure(:ruby_llm)` value, then this gem's own `Axn::RubyLLM.configure { |c| ... }` global, then the default below):
 
 | Option | Effect |
 |---|---|
-| `halt_after:` | When `true`, wraps a successful payload in `RubyLLM::Tool::Halt` to stop the agent loop after this call. Default `false`. |
-| `provider_params:` | Hash deep-merged into the tool definition sent to the provider (via RubyLLM's `with_params`) — an escape hatch for provider-specific tool fields RubyLLM doesn't model first-class (e.g. OpenAI `strict` function calling, Anthropic tool `cache_control`). Keys mirror that provider's tool shape. Default `{}`. |
+| `provider_options:` | Hash merged into the tool definition sent to the provider (via RubyLLM's `Tool.provider_options`) — an escape hatch for provider-specific tool fields RubyLLM doesn't model first-class (e.g. OpenAI `strict` function calling, Anthropic tool `cache_control`). Keys mirror that provider's tool shape. Default `{}`. |
 | `present_as:` | `:structured` (default) returns the exposed values as a JSON string; `:message` returns `result.message` instead. Same knob as axn-mcp's `present_as:`. |
 
 Set a default once on the Axn with `configure(:ruby_llm)`, and still override per call:
@@ -174,13 +202,15 @@ Set a default once on the Axn with `configure(:ruby_llm)`, and still override pe
 ```ruby
 class CreateWidget
   include Axn
-  configure(:ruby_llm) { |c| c.halt_after = true }   # default for this tool
+  configure(:ruby_llm) { |c| c.present_as = :message }        # default for this tool
   # ...
 end
 
-Axn::RubyLLM.wrap(CreateWidget)                      # halts after running
-Axn::RubyLLM.wrap(CreateWidget, halt_after: false)   # per-call override
+Axn::RubyLLM.wrap(CreateWidget)                               # returns result.message
+Axn::RubyLLM.wrap(CreateWidget, present_as: :structured)      # per-call override
 ```
+
+> **No more `halt_after:`.** RubyLLM 2.0 removed `Tool::Halt` along with the rest of the auto-halting machinery — the conversation loop is now caller-controlled. If you need a tool call to stop the loop, drive it yourself: `loop { chat.step; break if chat.complete? || done_condition }`. See RubyLLM's [Agentic Workflows](https://rubyllm.com/agentic-workflows/) guide.
 
 `configure(:ruby_llm)` needs no `include` beyond `Axn` — every Axn gets it for free (core's namespaced per-class config). It's usually written in the class body as above, but since it's a plain class method you can also call it from outside — e.g. `SomeThirdPartyAxn.configure(:ruby_llm) { |c| ... }` in an initializer, to configure an Axn you don't own. Namespacing is what lets **one base Axn be configured for multiple adapters at once**, each in its own namespace, without collision even when two adapters share a setting name (both this gem and axn-mcp expose `present_as`):
 
@@ -200,14 +230,14 @@ Pass `ambient_context:` to close over explicit caller context (e.g. `current_use
 Axn::RubyLLM.wrap(CreateWidget, ambient_context: { company_id: current_company.id })
 ```
 
-Passing `ambient_context:` returns a tool **instance** (closing over that context) rather than the tool class, since `chat.with_tool` accepts either.
+Passing `ambient_context:` returns a tool **instance** (closing over that context) rather than the tool class, since `chat.with_tools` accepts either.
 
 ### Using wrapped tools with RubyLLM directly
 
-`Axn::RubyLLM.ask(tools:)` covers the common single-call case. When you're driving `RubyLLM.chat` yourself — multi-turn conversations, streaming, or anything else beyond `ask` — register wrapped tools with RubyLLM's own `with_tool` / `with_tools`, which accept a `RubyLLM::Tool` class or instance:
+`Axn::RubyLLM.ask(tools:)` covers the common single-call case. When you're driving `RubyLLM.chat` yourself — multi-turn conversations, streaming, or anything else beyond `ask` — register wrapped tools with RubyLLM's own `with_tools`, which accepts one or many `RubyLLM::Tool` classes/instances:
 
 ```ruby
-chat = RubyLLM.chat.with_tool(Axn::RubyLLM.wrap(CreateWidget))
+chat = RubyLLM.chat.with_tools(Axn::RubyLLM.wrap(CreateWidget))
 chat.ask("Create a widget called Sprocket")
 
 # or register everything under the :ruby_llm adapter at once:
@@ -283,13 +313,13 @@ So the adapter guards that mapping step (only — the Axn call already reports i
 
 ### Schema reflection — provider notes
 
-The advertised tool schema is axn's reflected `input_schema`. A few things worth knowing when you care how it lands at a specific provider (Gemini is the strictest — it runs a mandatory OpenAPI-subset converter; OpenAI and Anthropic pass the schema through as-is):
+The advertised tool schema is axn's reflected `input_schema`, passed through to RubyLLM **unmodified** — the adapter does no per-provider schema rewriting. RubyLLM 2.0's Gemini protocol reads a tool's schema via `parametersJsonSchema`, the wire form verbatim, rather than rebuilding each property from a fixed whitelist (as its 1.x converter did), so nullable fields, `additionalProperties`, and entry-count bounds all reach Gemini the same way they reach OpenAI and Anthropic.
 
-- **Nullable/optional fields** — handled. axn reflects a nullable field as an array-valued `type` (`["integer", "null"]`); the adapter rewrites that to the equivalent `anyOf` form, because Gemini's converter can't read array-valued types and would otherwise collapse the field to `STRING`. No action needed on your part.
-- **Array fields — declare `of:`.** `expects :ids, type: Array` reflects to `{type: array}` with no `items`, so the element type isn't advertised (Gemini then assumes `string`; OpenAI *strict* mode requires `items`). Declare the element type — `expects :ids, type: Array, of: Integer` — to advertise `items` correctly.
+A few things worth knowing about what axn itself reflects, independent of RubyLLM version:
+
+- **Array fields — declare `of:`.** `expects :ids, type: Array` reflects to `{type: array}` with no `items`, so the element type isn't advertised (some providers then assume `string`; OpenAI *strict* mode requires `items`). Declare the element type — `expects :ids, type: Array, of: Integer` — to advertise `items` correctly.
 - **Enums are advertised — use the top-level `inclusion:` key.** `expects :color, type: String, inclusion: %w[red green blue]` (a bare Array, or the long form `inclusion: { in: %w[red green blue] }`) reflects to `{ type: "string", enum: ["red", "green", "blue"] }`, so the model is told the allowed set (an `optional:` field keeps `null` in the enum; a dynamic `in: -> { ... }` is correctly skipped rather than guessed). Note this is the **top-level `inclusion:` option**, not `validate: { inclusion: ... }` — `validate:` is axn's custom-callable hook (it needs `with:`), so that spelling neither enforces nor reflects the set.
-- **Hash maps and entry counts** — handled. A map (`expects :scores, type: Hash, of: { keys: String, values: Integer }`) reflects to `additionalProperties`, and a Hash's entry-count bounds to `minProperties`/`maxProperties`. Gemini's converter carries none of the three, so a map would otherwise arrive as an empty `{type: OBJECT}` — no error, but the model never learns what the values must be, so its guess is rejected at runtime instead. The adapter restates the constraint in that node's `description` (“An object mapping arbitrary keys to integer values. This object must not be empty.”), which Gemini does forward; a structured value type carries its compact JSON Schema alongside. The real keys are left in place for OpenAI/Anthropic, which enforce them, so the prose is redundant there rather than load-bearing. Your own `description:` is kept and the generated sentences appended after it. No action needed on your part.
-- **Conditional expectations** (`expects :token, if: :use_token`) reflect to a JSON Schema `allOf`/`if`/`then` clause. Gemini's converter ignores it — the field degrades to plain-optional (safe: a valid call is never wrongly rejected, but the conditional isn't conveyed to the model). This gem doesn't set OpenAI's `strict` mode, so OpenAI tolerates `allOf` by default; if you opt into strict via `provider_params`, OpenAI will reject `allOf`. Either way, encoding the rule in `description:` is the portable option.
+- **Conditional expectations** (`expects :token, if: :use_token`) reflect to a JSON Schema `allOf`/`if`/`then` clause. Whether a given provider's tool-schema handling honors that clause is between RubyLLM and the provider, not something this adapter controls — check the provider's own function-calling docs if it matters for your case. Encoding the rule in `description:` remains the portable option regardless.
 
 ## Testing
 
@@ -305,7 +335,7 @@ it "summarizes the thread" do
 end
 ```
 
-The response is the only required argument — pass it positionally (as above) or as `response:`. A Hash response is auto-JSON-serialized for `json: true` calls; pass `schema:` to route a Hash through the schema path unparsed (and to assert the exact schema class). Token counts and cost default to zero and can be set explicitly to exercise cost/usage logic:
+The response is the only required argument — pass it positionally (as above) or as `response:`. Pass `schema:` to route a Hash response through the schema path (stubbing `raw_message.parsed` so `result.response` gets the Hash back unparsed, matching what a real `schema:` call returns). Token counts and cost default to zero and can be set explicitly to exercise cost/usage logic:
 
 ```ruby
 stub_axn_ruby_llm({ "company_id" => 42 }, schema: CompanyMatch)
@@ -349,8 +379,8 @@ When disabled, `Axn::RubyLLM.ask` returns a **success** result with obvious stub
 
 | Field | Stubbed value |
 |---|---|
-| `response` | `"stubbed response value"` (plain) / `{ "stubbed" => true }` (`json: true` or `schema:`) |
-| `raw_message` | Stub struct with `.content`, `.input_tokens`, `.output_tokens`, `.cache_read_tokens`, `.cache_write_tokens`, `.model_id` |
+| `response` | `"stubbed response value"` (plain) / `{ "stubbed" => true }` (`schema:`) |
+| `raw_message` | Stub struct with `.content`, `.tokens` (a real `RubyLLM::Tokens`, all zero), `.model`, `.parsed` |
 | `input_tokens` / `output_tokens` / `cache_read_tokens` / `cache_write_tokens` / `prompt_tokens` | `0` |
 | `cost` | `0.0` |
 | `cost_breakdown` | `nil` |

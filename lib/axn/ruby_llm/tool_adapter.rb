@@ -3,15 +3,14 @@
 module Axn
   module RubyLLM
     # Namespaced per-class config (axn's `Axn::Configurable`, PRO-2880): any Axn — with no
-    # adapter-specific mixin required — can declare `configure(:ruby_llm) { |c| c.halt_after = true }`
+    # adapter-specific mixin required — can declare `configure(:ruby_llm) { |c| c.present_as = :message }`
     # to set these per-class, alongside e.g. `configure(:mcp) { ... }` for a different adapter on the
     # same class, without the two colliding. `wrap` resolves them via `resolve_override_for`, which
     # falls back to this module's own global `config` (`Axn::RubyLLM.configure { |c| ... }`) and then
     # to each setting's default — the same class-override-then-global-then-default chain a flat
     # `overridable: true` accessor would give a single-adapter consumer.
     config_namespace :ruby_llm
-    setting :halt_after, default: false, overridable: true
-    setting :provider_params, default: {}, overridable: true
+    setting :provider_options, default: {}, overridable: true
     setting :present_as, default: :structured, one_of: %i[structured message], overridable: true
     # `Axn::Tools::AdapterSerialization` (extended onto Axn::RubyLLM in ruby_llm.rb, which is required
     # before this file reopens the module) owns this setting's declaration so the three adapters can't
@@ -35,13 +34,13 @@ module Axn
       ADAPTER_FAILURE_MESSAGE = "The tool could not produce a valid response"
 
       class << self
-        def wrap(axn_class, halt_after: nil, provider_params: nil, present_as: nil, render_as: NOT_SET, ambient_context: NOT_SET)
+        def wrap(axn_class, provider_options: nil, present_as: nil, render_as: NOT_SET, provider_params: NOT_SET, ambient_context: NOT_SET)
           validate_present_as_kwargs!(present_as, render_as)
+          validate_provider_options_kwargs!(provider_params)
 
           tool_class = build_tool_class(
             axn_class,
-            halt_after: halt_after.nil? ? Axn::RubyLLM.resolve_override_for(axn_class, :halt_after) : halt_after,
-            provider_params: provider_params.nil? ? Axn::RubyLLM.resolve_override_for(axn_class, :provider_params) : provider_params,
+            provider_options: provider_options.nil? ? Axn::RubyLLM.resolve_override_for(axn_class, :provider_options) : provider_options,
             present_as: present_as.nil? ? Axn::RubyLLM.resolve_override_for(axn_class, :present_as) : present_as,
             ambient_context:,
           )
@@ -67,6 +66,17 @@ module Axn
 
           hint = present_as == :text ? " (the `:text` value was renamed to `:message`)" : ""
           raise ArgumentError, "present_as must be one of :structured, :message; got #{present_as.inspect}#{hint}"
+        end
+
+        # `provider_params:` was renamed to `provider_options:` (PRO-3467) to match RubyLLM 2.0's own
+        # `Tool.provider_options`, which replaced `with_params` for tool-level provider metadata.
+        # Same hard-error treatment as `render_as:` above: pre-1.0, never silently shimmed.
+        def validate_provider_options_kwargs!(provider_params)
+          return if provider_params.equal?(NOT_SET)
+
+          raise ArgumentError,
+                "`provider_params:` was renamed to `provider_options:` " \
+                "(e.g. `Axn::RubyLLM.wrap(..., provider_options: { ... })`)."
         end
 
         # `guard_tool_response`'s `on_error`: the transport-native error response, plus the operator's
@@ -101,7 +111,7 @@ module Axn
           { error: ADAPTER_FAILURE_MESSAGE }
         end
 
-        def build_tool_class(axn_class, halt_after:, provider_params:, present_as:, ambient_context:)
+        def build_tool_class(axn_class, provider_options:, present_as:, ambient_context:)
           # Core's canonical, provider-safe tool_name (PRO-2921): strips configured leading prefixes,
           # snake_cases with single underscores, restricts to [a-z0-9_], and is never blank (anonymous
           # -> "tool"). Pass the `:ruby_llm` adapter key so a per-adapter `tool ruby_llm: { name: }`
@@ -111,8 +121,14 @@ module Axn
           # different name, so provider tool calls / forced choices on the declared name wouldn't
           # match. Absent an override it's identical to the zero-arg name (Axn::MCP.wrap passes `:mcp`
           # the same way -- the author-once point).
+          #
+          # Passed through unmodified (PRO-3467): RubyLLM 2.0's Gemini protocol reads a tool's schema
+          # via `parametersJsonSchema` -- the wire form verbatim, with no whitelist converter in the
+          # way -- so the array-valued-`type` / additionalProperties / min-maxProperties workarounds
+          # 1.x needed here are gone along with the fixed-property Gemini schema converter they patched
+          # around.
           tool_name = axn_class.tool_name(:ruby_llm)
-          input_schema = normalize_nullable_types(annotate_object_constraints(axn_class.input_schema))
+          input_schema = axn_class.input_schema
           # Built HERE, not inside `define_method(:execute)`: `self` in the executed block is the
           # ::RubyLLM::Tool instance, which has no access to this module's private helpers. Closing
           # over the lambda from build_tool_class's scope binds it to ToolAdapter instead.
@@ -120,10 +136,10 @@ module Axn
 
           Class.new(::RubyLLM::Tool) do
             description(axn_class.description) if axn_class.description
-            params(input_schema)
-            with_params(**provider_params) if provider_params.any?
+            parameters(input_schema)
+            provider_options(provider_options) if provider_options.any?
 
-            define_method(:name) { tool_name }
+            define_singleton_method(:tool_name) { tool_name }
 
             define_method(:execute) do |**args|
               # Run the Axn through axn core's tool Invoker (PRO-2943): input types are coerced from the
@@ -164,199 +180,25 @@ module Axn
               # exceptions -- double-guarding would double-report on_exception), and the block's
               # return value is #execute's.
               Axn::RubyLLM.guard_tool_response(axn_class, on_error: on_serialization_failure) do
-                # RubyLLM::Chat#handle_tool_calls only treats a Content/Content::Raw return as-is; any
-                # other object (including a plain Hash) gets `#to_s`'d before being sent to the
-                # provider -- which for a Hash produces Ruby's inspect syntax (`{"k"=>"v"}`), not
-                # JSON. Serialize structured payloads ourselves so the wire form is always valid JSON.
+                # RubyLLM::Tool.split_result (called from Chat#add_tool_result_message) sends a String
+                # through as-is but `#to_json`'s a returned Hash/Array only via its OWN #to_json
+                # dispatch, not necessarily matching how axn would serialize it (Symbol keys/values,
+                # BigDecimal, Time, opaque-value rejection). Serialize structured payloads ourselves so
+                # the wire form always reflects axn's own serialization contract, not Ruby's default.
                 #
                 # `serialize_exposed` (not `Serialization.render` directly) resolves
                 # reject_opaque_exposed_values PER CALL off the result's own action class, so a
                 # per-tool `configure(:ruby_llm)` override is honored and a config change reaches
                 # already-wrapped tools. `present_as` stays a wrap-time kwarg: it's adapter-owned, not
                 # part of the shared mixin, and `wrap` accepts it as an explicit override.
-                payload = if present_as == :message
-                            result.message
-                          else
-                            Axn::RubyLLM.serialize_exposed(result).to_json
-                          end
-                halt_after ? halt(payload) : payload
+                if present_as == :message
+                  result.message
+                else
+                  Axn::RubyLLM.serialize_exposed(result).to_json
+                end
               end
             end
           end
-        end
-
-        # axn reflects a nullable/optional field as a JSON Schema array-valued `type`
-        # (e.g. `["integer", "null"]`). That's valid JSON Schema and OpenAI/Anthropic consume it
-        # fine, but RubyLLM's Gemini converter only recognizes anyOf-form nullability: it does
-        # `param_type_for_gemini(type)` with `type.to_s.downcase`, so an array `type` matches no
-        # case and falls through to STRING -- silently dropping both the declared type and the
-        # nullability. Rewrite every array-valued `type` into the equivalent `anyOf: [{type: ...}]`,
-        # which Gemini's `normalize_any_of_schema` collapses back to the real type + nullable, and
-        # which the other providers accept unchanged. Purely a wire-shape change: the admitted value
-        # set is identical, and the adapter's own validator (json_types_for) already reads anyOf.
-        #
-        # Builds new Hashes/Arrays throughout rather than mutating -- axn may hand back a memoized
-        # input_schema, and mutating it would corrupt every other reader.
-        def normalize_nullable_types(node)
-          case node
-          when Hash
-            rebuilt = node.to_h { |key, value| [key, normalize_nullable_types(value)] }
-            if rebuilt[:type].is_a?(Array)
-              types = rebuilt.delete(:type)
-              rebuilt[:anyOf] = types.map { |type| { type: } }
-            end
-            rebuilt
-          when Array
-            node.map { |value| normalize_nullable_types(value) }
-          else
-            node
-          end
-        end
-
-        # PRO-3172. RubyLLM's Gemini converter rebuilds every property from a fixed whitelist
-        # (`convert_property`: description/enum/format/nullable/maximum/minimum/multipleOf, plus
-        # properties/required and, for an array, items/minItems/maxItems). Three keys axn emits for a
-        # Hash fall outside it: `additionalProperties` -- a map's value contract, from
-        # `of: { keys:, values: }` -- and `minProperties`/`maxProperties`, its entry-count bounds.
-        # All three are dropped with no error raised, so a map reaches Gemini as a bare
-        # `{type: OBJECT, properties: {}}`: the model never learns what the values must be, sends
-        # whatever it likes, and the Invoker rejects the call. The constraint degrades from
-        # schema-enforced to runtime-rejected, costing a wasted round trip plus a recovery the model
-        # has to work out for itself.
-        #
-        # Gemini's Schema proto has no equivalent to translate any of them to -- but `description` IS
-        # copied through, so restate them as prose there. Applied unconditionally rather than only for
-        # Gemini: the adapter has no provider to branch on (a wrapped tool class outlives the choice
-        # of chat), and on OpenAI/Anthropic -- which take `params_schema` verbatim and so still get
-        # the enforceable keys themselves -- the extra sentence is merely redundant, never wrong.
-        #
-        # Same non-mutation rule as normalize_nullable_types, for the same reason: axn may hand back
-        # a memoized input_schema, so build new Hashes/Arrays throughout.
-        def annotate_object_constraints(node)
-          case node
-          when Hash
-            rebuilt = node.to_h { |key, value| [key, annotate_object_constraints(value)] }
-            # Read the sentences off the ORIGINAL node, not `rebuilt`: map_sentence may dump the value
-            # subschema as JSON, and the original is the copy that has no generated prose in it yet.
-            # The JSON clause goes LAST: it ends in a brace rather than a period, so anything appended
-            # after it would read as a run-on (and a period placed right after `}` risks being read as
-            # part of the JSON itself).
-            return rebuilt unless object_node?(node)
-
-            sentences = [map_sentence(node), entry_count_sentence(node), value_schema_clause(node)].compact
-            return rebuilt if sentences.empty?
-
-            # merge (rather than assignment into a fresh Hash) so an author-supplied description keeps
-            # its original position in the node; the generated sentences follow the author's text.
-            rebuilt.merge(description: [node[:description], *sentences].compact.join(" "))
-          when Array
-            node.map { |value| annotate_object_constraints(value) }
-          else
-            node
-          end
-        end
-
-        # A map's value contract as prose. A bare type reads as a plain word -- "integer", "string or
-        # integer" -- which says everything the schema does; anything structured is named by its
-        # top-level type here and spelled out exactly by value_schema_clause below.
-        def map_sentence(node)
-          values = map_values(node)
-          return nil unless values
-
-          # `additionalProperties` governs only the keys `properties` does NOT match, so a map that
-          # also declares a `shape:` carries both on one node -- and Gemini keeps `properties`, which
-          # makes "arbitrary keys" actively wrong in that case.
-          lead = if node[:properties].is_a?(Hash) && node[:properties].any?
-                   "Keys other than those listed map to"
-                 else
-                   "An object mapping arbitrary keys to"
-                 end
-
-          phrase = bare_type_phrase(values)
-          phrase ? "#{lead} #{phrase} values." : "#{lead} values."
-        end
-
-        # A structured value type -- an array's `items`, a nested map, a constrained scalar -- would
-        # need hand-written English grammar to render as prose, which degrades fast with nesting
-        # depth, so carry it as compact JSON Schema instead: exact at any depth, and a form models
-        # read natively. Skipped when the type word alone already said everything.
-        def value_schema_clause(node)
-          values = map_values(node)
-          return nil if values.nil? || bare_type?(values)
-
-          "Each value must match this JSON Schema: #{JSON.generate(values)}"
-        end
-
-        # The recursion above walks every Hash in the schema, but not every Hash IS a schema node --
-        # `properties` is a name-to-schema map, so an Axn with a field named `additionalProperties` or
-        # `minProperties` puts a Hash (or an Integer) at exactly the key this pass reads. Without this
-        # gate, such a container was itself annotated, injecting a `description` key into `properties`
-        # and thereby advertising a phantom parameter named "description" -- which the model might then
-        # send and the Invoker would reject as undeclared. Requiring a declared object type also keeps
-        # object prose off a string/array node that carries these keys for any other reason.
-        def object_node?(node)
-          type = node[:type]
-          type == "object" || (type.is_a?(Array) && type.include?("object"))
-        end
-
-        # A map's value schema, or nil if this node isn't a map. axn omits `additionalProperties`
-        # entirely rather than emitting an empty one, and never emits the boolean form.
-        def map_values(node)
-          values = node[:additionalProperties]
-          values if values.is_a?(Hash) && values.any?
-        end
-
-        # True when a schema constrains nothing beyond the type itself -- exactly the case a type word
-        # conveys in full, with no JSON clause needed.
-        def bare_type?(schema)
-          case schema.keys
-          when [:type] then true
-          when [:anyOf] then schema[:anyOf].all? { |entry| entry.is_a?(Hash) && entry.keys == [:type] }
-          else false
-          end
-        end
-
-        # "integer"; "integer or null" (axn's array-valued nullable type -- annotation runs BEFORE
-        # normalize_nullable_types rewrites it to anyOf); "string or integer" (a union's anyOf). nil
-        # when no type is declared at all, which sends the caller to the JSON-only phrasing.
-        def bare_type_phrase(schema)
-          types = if schema[:type].is_a?(String)
-                    [schema[:type]]
-                  elsif schema[:type].is_a?(Array)
-                    schema[:type]
-                  elsif schema[:anyOf].is_a?(Array)
-                    schema[:anyOf].filter_map { |entry| entry[:type] if entry.is_a?(Hash) }
-                  end
-
-          return nil unless types.is_a?(Array) && types.any? && types.all?(String)
-
-          types.uniq.join(" or ")
-        end
-
-        # minProperties/maxProperties. Gemini forwards an ARRAY's minItems/maxItems but has no OBJECT
-        # equivalent, so an entry-count bound is lost whether or not the node is also a map -- a plain
-        # `expects :meta, type: Hash` already reflects `minProperties: 1` from axn's non-blank default.
-        def entry_count_sentence(node)
-          min = node[:minProperties]
-          max = node[:maxProperties]
-          # A zero minimum admits the empty object, i.e. constrains nothing -- reporting it as
-          # "must not be empty" below would state the opposite of what the schema allows.
-          min = nil unless min.is_a?(Integer) && min.positive?
-          max = nil unless max.is_a?(Integer)
-          return nil unless min || max
-
-          bound = if min && max && min == max then "exactly #{entry_count(min)}"
-                  elsif min && max then "between #{min} and #{entry_count(max)}"
-                  elsif max then "at most #{entry_count(max)}"
-                  elsif min > 1 then "at least #{entry_count(min)}"
-                  end
-
-          # A bare `minProperties: 1` is just non-emptiness, and reads far better said that way.
-          bound ? "This object must have #{bound}." : "This object must not be empty."
-        end
-
-        def entry_count(count)
-          "#{count} #{count == 1 ? "entry" : "entries"}"
         end
       end
     end

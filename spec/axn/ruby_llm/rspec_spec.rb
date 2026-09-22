@@ -14,16 +14,6 @@ RSpec.describe Axn::RubyLLM::RSpec::Helpers do
       end
     end
 
-    context "with a Hash response (json: true)" do
-      before { stub_axn_ruby_llm(response: { "key" => "value" }) }
-
-      it "serializes to JSON for the ask call and parses back" do
-        result = Axn::RubyLLM.ask(prompt: "extract", json: true)
-        expect(result).to be_ok
-        expect(result.response).to eq({ "key" => "value" })
-      end
-    end
-
     context "with a schema" do
       let(:schema_class) { Class.new }
       before { stub_axn_ruby_llm(response: { "company_id" => 7 }, schema: schema_class) }

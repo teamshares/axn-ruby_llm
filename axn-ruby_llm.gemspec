@@ -9,7 +9,7 @@ Gem::Specification.new do |spec|
   spec.email = ["kali@teamshares.com"]
 
   spec.summary = "RubyLLM wrapper for Axn actions"
-  spec.description = "Call LLMs from Axn actions using RubyLLM, with structured error handling, optional JSON mode, and cost/token tracking."
+  spec.description = "Call LLMs from Axn actions using RubyLLM, with structured error handling, schema-based structured output, and cost/token tracking."
   spec.homepage = "https://github.com/teamshares/axn-ruby_llm"
   spec.license = "MIT"
 
@@ -31,7 +31,19 @@ Gem::Specification.new do |spec|
 
   # PRO-2996: requires `Axn::Tools::AdapterSerialization` (`tool_roots_default`,
   # `declare_reject_opaque_exposed_values!`, `serialize_exposed`, `guard_tool_response`) and
-  # `Axn::Extensions::Tracing.annotate_span` (PRO-3278) -- both released in 0.1.0-alpha.6.
-  spec.add_dependency "axn", ">= 0.1.0-alpha.6", "< 0.2.0"
-  spec.add_dependency "ruby_llm", ">= 1.15", "< 2.0"
+  # `Axn::Extensions::Tracing.annotate_span` (PRO-3278) -- both released in 0.1.0-alpha.6. Floor
+  # bumped to the alpha.6.1 patch (no new API needed) to pick up its logger-raise best_effort
+  # hardening and model:/Result#declared_fields fixes.
+  spec.add_dependency "axn", ">= 0.1.0-alpha.6.1", "< 0.2.0"
+  # PRO-3467: RubyLLM 2.0 is a breaking rewrite of the Tool DSL, error hierarchy, and token/cost
+  # readers -- no code targets both 1.x and 2.x, so this is a hard cut. Was pinned to the rc4 line
+  # while this gem itself shipped as 0.3.0.rc1; raised to the 2.0.0 GA floor once RubyLLM released
+  # it (2026-09-18) -- re-diffed rc4 against 2.0.0 first and confirmed every path this gem touches
+  # (Tool, the Gemini/Anthropic/Chat-Completions protocols) is byte-identical between the two; see
+  # CHANGELOG.
+  spec.add_dependency "ruby_llm", ">= 2.0", "< 3.0"
+  # ask.rb rescues ::Faraday::Error directly (a connection-level failure never reaches RubyLLM's own
+  # error wrapping); previously arrived only transitively through ruby_llm. Matches ruby_llm's own
+  # floor (its gemspec declares `>= 1.10.0` with no upper bound) rather than adding a narrower one.
+  spec.add_dependency "faraday", ">= 1.10.0"
 end

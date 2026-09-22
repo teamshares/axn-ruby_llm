@@ -1,5 +1,111 @@
 # Changelog
 
+## [0.3.0] - 2026-09-22
+
+RubyLLM 2.0 is a breaking rewrite (renamed Tool DSL, restructured error hierarchy, a usage ledger
+replacing per-message token/cost readers, `RubyLLM::Schema` moved to the separate `schematist` gem)
+with no compatibility shim for 1.x, so this is a hard cut: `ruby_llm ">= 2.0", "< 3.0"` replaces the
+previous `">= 1.15", "< 2.0"` floor, and 1.x is no longer supported by this gem.
+
+This release was developed against ruby_llm's `2.0.0.rc4` release candidate (as `0.3.0.rc1`, never
+published as a final release) and raised to the `2.0.0` GA floor once RubyLLM released it
+(2026-09-18) — re-diffed first and confirmed every path this gem touches (`Tool`, the
+Gemini/Anthropic/Chat-Completions protocols) is byte-identical between rc4 and GA.
+
+### Breaking
+
+- **Tool DSL renamed to match `RubyLLM::Tool` 2.0.** Internal to `Axn::RubyLLM.wrap`'s generated
+  tool class (`params`/`with_params` → `parameters`/`provider_options`); not observable unless you
+  subclassed or introspected a wrapped tool directly. `Tool#params_schema` is now
+  `#parameters_schema`, and `Tool#parameters` (the empty `Parameter` DSL reader) is now
+  `#declared_parameters`.
+- **`provider_params:` renamed to `provider_options:`** (the `wrap` kwarg and the
+  `configure(:ruby_llm)` setting), matching RubyLLM 2.0's own `Tool.provider_options`. A leftover
+  `provider_params:` raises `ArgumentError` with a pointer, the same hard-error pattern as the
+  pre-existing `render_as:` → `present_as:` rename.
+- **`halt_after:` removed outright** — the `wrap` kwarg, the `configure(:ruby_llm)` setting, and the
+  `RubyLLM::Tool::Halt`-wrapping behavior. RubyLLM 2.0 deleted `Tool::Halt`; the conversation loop is
+  now caller-controlled (`chat.step` / `chat.complete?`). See RubyLLM's Agentic Workflows guide for
+  the replacement pattern.
+- **`json:` input removed from `Axn::RubyLLM::Ask`.** There is no protocol-agnostic JSON-mode
+  request field in RubyLLM 2.0 (OpenAI's `response_format: {type: "json_object"}` is Chat
+  Completions-only, and OpenAI now defaults to the Responses API). `schema:` is the replacement —
+  it now additionally accepts a plain Hash (already supported, previously undocumented) or an Axn
+  class (new: forwards `axn_class.output_schema`), alongside a `Schematist::Schema` class/instance.
+  The Axn-class form makes adjustments axn's own `output_schema` has no reason to make on its own,
+  each confirmed against a real provider (Anthropic, live) rather than assumed from docs alone
+  (which turned out unreliable on this point — a docs summary claimed `minLength` was also
+  unsupported by Anthropic; a flat schema with `minLength: 1` on a String field succeeded live
+  regardless, so only what's actually confirmed failing is adjusted):
+  - Injects `additionalProperties: false` on every fixed-shape object node — required
+    *unconditionally* by Anthropic's structured output (confirmed live: without it, the request
+    fails with `"For 'object' type, 'additionalProperties' must be explicitly set to false"`) and
+    by OpenAI's strict mode — while leaving a map's own `additionalProperties` (its value schema)
+    untouched.
+  - Strips `minProperties`/`maxProperties` from every object *schema node* — axn emits
+    `minProperties: 1` by default on a nested fixed-shape `Hash` field, and Anthropic's schema
+    validator rejects it outright (confirmed live: `"For 'object' type, property 'minProperties' is
+    not supported"`). Gated on the node actually being an object schema (declaring `type`), not on
+    the key name alone — a code-review catch: the recursive pass walks every Hash in the schema,
+    but `properties` is a name-to-schema *map*, so an Axn exposing a field literally named
+    `minProperties` would otherwise have that field silently dropped while `required` still named
+    it, producing an invalid schema (confirmed live before the fix).
+  - Pins `strict: false`, since RubyLLM's own strict-inference would otherwise turn on for the
+    common case of every property being required, and OpenAI's *full* strict mode additionally
+    requires every property to appear in `required` even when conceptually optional, which axn's
+    reflection doesn't promise.
+
+  **Known limitation, confirmed live, not worked around:** a `Hash` map field (`type: Hash, of:
+  {...}`) doesn't survive this path against every provider. Anthropic's structured output rejects
+  `additionalProperties` set to anything but the literal `false` (confirmed live:
+  `"'additionalProperties: object' is not supported. Please set 'additionalProperties' to false"`),
+  and OpenAI's strict mode has the same restriction by design — neither provider's structured-output
+  feature represents dynamic/arbitrary keys, only a fixed shape, so there's no schema-legal way to
+  route around it. Use a fixed-shape `Hash` (`shape:`) instead, or pass your own schema for that
+  provider if you specifically need a map. Pass a `Schematist::Schema` instead of an Axn class if you
+  need OpenAI's *full* strict-mode guarantee.
+- **`RubyLLM::Schema` is `Schematist::Schema` in RubyLLM 2.0** — this gem does not shim the old
+  name. Any `schema:` class you declare must subclass `Schematist::Schema`.
+- **`Axn::RubyLLM.configuration` / `.reset_configuration!` removed** — these were deprecated in
+  0.2.0 for `.config` / `.reset_config!` and scheduled for removal in 0.3.0 regardless of the
+  RubyLLM 2.0 port; landing in the same release since both are breaking-change cuts.
+
+### Changed
+
+- **Token and cost exposures now read RubyLLM 2.0's own usage ledger** (`Chat#tokens` /
+  `Chat#cost`) instead of summing `Message#input_tokens`/`#cache_read_tokens`/etc. across
+  `chat.messages` by hand. Exposure names (`input_tokens`, `output_tokens`, `cache_read_tokens`,
+  `cache_write_tokens`, `prompt_tokens`, `cost`, `cost_breakdown`) are unchanged, but the totals now
+  additionally include failed retries and no-message provider attempts within a tool loop — strictly
+  more accurate than the previous per-message sum, which only ever saw messages that made it onto
+  the chat.
+- **`Message#model_id` reads are now `Message#model`**; `response_model` in OTel attributes follows.
+- **`with_params(temperature:)` is now `with_temperature(temperature)`.** RubyLLM 2.0 sends the
+  temperature you set verbatim; 1.x sometimes rewrote it to `1.0` or dropped it for models that
+  didn't support it. A model that now rejects your value raises `RubyLLM::BadRequestError` instead
+  of silently ignoring it.
+- **`Ask`'s `KNOWN_ERROR_CLASSES` grew three entries** — `RubyLLM::ModelRegistryError`,
+  `RubyLLM::PendingToolCallsError`, `RubyLLM::CancelledError` — new in RubyLLM 2.0, so their
+  messages surface instead of falling into the generic `"LLM request failed"` bucket.
+- **Removed ~170 lines of Gemini schema workarounds** (`normalize_nullable_types`,
+  `annotate_object_constraints`, and six helpers) from the tool adapter. RubyLLM 2.0's Gemini
+  protocol reads a tool's schema via `parametersJsonSchema` — the wire form verbatim — rather than
+  rebuilding each property from the fixed whitelist that dropped array-valued `type`,
+  `additionalProperties`, and `min`/`maxProperties`. A wrapped tool's schema is now passed to every
+  provider unmodified.
+- **The gemspec now declares `faraday` directly** (previously arrived only transitively through
+  `ruby_llm`), since `ask.rb` rescues `::Faraday::Error` directly.
+- **`axn` floor bumped to `0.1.0-alpha.6.1`** (from `0.1.0-alpha.6`). No new API is required — this
+  just picks up alpha.6.1's logger-raise `best_effort` hardening and `model:`/`Result#declared_fields`
+  fixes.
+
+### Fixed
+
+- **`stub_axn_ruby_llm`'s message double no longer needs `RubyLLM.models.find` stubbed.** The test
+  helper's `chat.cost`/`chat.tokens` stubs mirror the real 2.0 ledger reads directly, removing a
+  layer of indirection through a stubbed model registry lookup that the production code no longer
+  performs either.
+
 ## [0.2.1] - 2026-09-03
 
 ### Added
