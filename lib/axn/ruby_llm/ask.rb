@@ -11,9 +11,28 @@ module Axn
       expects :system_prompt, optional: true
       expects :temperature, optional: true
       expects :tools, optional: true
+      # Forwarded verbatim to Chat#with_provider_tools -- a Hash of alias => options, e.g.
+      # `provider_tools: { mcp: { name:, url:, headers:, allowed_tools:, require_approval: } }` for a
+      # provider-hosted remote MCP server, or `{ web_search: {} }`. See RubyLLM::Chat#with_provider_tools.
+      expects :provider_tools, optional: true
+      # Forwarded verbatim to Chat#with_tool_options (choice:/calls:/concurrency:).
+      expects :tool_options, optional: true
+      # A callable given each pending ToolCall (from Chat#pending_approvals -- local tools declared
+      # with `requires_approval`, or provider-hosted remote calls awaiting an mcp_approval_request) and
+      # returning truthy to approve, falsy to deny. Required to drive a chat past #awaiting_approval? --
+      # without it, `llm_response` is whatever #ask returned when the loop first parked, and the
+      # response schema/tool loop never completes. Only meaningful alongside provider_tools using
+      # require_approval, or a local tool declared with `requires_approval`.
+      expects :on_remote_tool_approval, optional: true
 
       exposes :response
       exposes :raw_message
+      # A plain-Hash summary of every message the chat exchanged (system prompt excluded), in order:
+      # role, content, tool_calls (name/arguments/remote?), tool_call_id, and server_tool_calls (the
+      # provider-executed calls a hosted MCP server ran, e.g. Metabase queries). Built once per call
+      # from Chat#messages, which RubyLLM already retains -- this only shapes it for a caller that
+      # doesn't want to reach into raw RubyLLM::Message objects.
+      exposes :transcript, type: Array, allow_blank: true
       exposes :input_tokens, allow_nil: true
       exposes :output_tokens, allow_nil: true
       exposes :cache_read_tokens, allow_nil: true
@@ -92,6 +111,7 @@ module Axn
         expose(
           response: parsed_response,
           raw_message: llm_response,
+          transcript: transcript_entries,
           input_tokens: token_usage.input,
           output_tokens: token_usage.output,
           cache_read_tokens: token_usage.cache_read,
@@ -123,6 +143,7 @@ module Axn
         {
           response: parsed_content || content,
           raw_message: StubMessage.new(content:, tokens: zero_tokens, model: "stubbed"),
+          transcript: [],
           input_tokens: 0,
           output_tokens: 0,
           cache_read_tokens: 0,
@@ -160,7 +181,23 @@ module Axn
         vals.all?(&:nil?) ? nil : vals.sum(&:to_i)
       end
 
-      memo def llm_response = chat.ask(prompt)
+      # Without on_remote_tool_approval, this is exactly #ask -- one #complete run, parked (like
+      # before this feature existed) if the chat lands on an unresolved approval. With it, drive
+      # #complete past every approval Chat#pending_approvals reports, until the loop truly finishes.
+      # Chat#complete already loops through ordinary tool calls on its own; this only extends that
+      # loop across the approval pauses it otherwise stops at.
+      memo def llm_response
+        message = chat.ask(prompt)
+        return message unless on_remote_tool_approval
+
+        while chat.awaiting_approval?
+          chat.pending_approvals.each do |tool_call|
+            on_remote_tool_approval.call(tool_call) ? chat.approve(tool_call) : chat.deny(tool_call)
+          end
+          message = chat.complete
+        end
+        message
+      end
 
       memo def chat
         ::RubyLLM.chat(model: resolved_model).tap do |c|
@@ -168,6 +205,25 @@ module Axn
           c.with_schema(resolved_schema) if schema
           c.with_temperature(temperature) if temperature
           c.with_tools(*resolved_tools) if resolved_tools.any?
+          c.with_provider_tools(**provider_tools) if provider_tools
+          c.with_tool_options(**tool_options) if tool_options
+        end
+      end
+
+      # chat.messages already retains the whole exchange (RubyLLM's own Chat#tokens / Chat#cost read
+      # off it the same way) -- this only reshapes each Message into a plain Hash a caller can log or
+      # assert against without reaching into RubyLLM::Message/ToolCall objects. The system prompt is
+      # excluded: it's an Ask input the caller already has (system_prompt), not something the loop
+      # produced.
+      def transcript_entries
+        chat.messages.reject { |m| m.role == :system }.map do |m|
+          {
+            role: m.role,
+            content: m.content.is_a?(String) ? m.content : nil,
+            tool_calls: m.tool_calls&.transform_values { |tc| { name: tc.name, arguments: tc.arguments, remote: tc.remote? } },
+            tool_call_id: m.tool_call_id,
+            server_tool_calls: m.server_tool_calls,
+          }
         end
       end
 

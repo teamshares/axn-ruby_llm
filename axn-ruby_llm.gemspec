@@ -46,4 +46,9 @@ Gem::Specification.new do |spec|
   # error wrapping); previously arrived only transitively through ruby_llm. Matches ruby_llm's own
   # floor (its gemspec declares `>= 1.10.0` with no upper bound) rather than adding a narrower one.
   spec.add_dependency "faraday", ">= 1.10.0"
+  # remote_mcp.rb's Axn::RubyLLM.remote_mcp_tools wraps the official MCP Ruby SDK's HTTP client
+  # (MCP::Client::HTTP) so a remote MCP server's tools present as ordinary ::RubyLLM::Tool
+  # subclasses. Floored at the release that ships Client::HTTP with SEP-2322 approval/elicitation
+  # driving; no upper bound taken yet since this gem tracks a single 1.x line.
+  spec.add_dependency "mcp", ">= 1.3", "< 2.0"
 end

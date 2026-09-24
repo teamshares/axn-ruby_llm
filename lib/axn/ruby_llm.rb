@@ -5,6 +5,7 @@ require "axn"
 
 require_relative "ruby_llm/version"
 require_relative "ruby_llm/ask"
+require_relative "ruby_llm/remote_mcp"
 
 module Axn
   module RubyLLM
@@ -42,6 +43,10 @@ module Axn
       def enabled?
         value = config.enabled
         value.respond_to?(:call) ? !!value.call : !!value
+      end
+
+      def remote_mcp_tools(...)
+        RemoteMcp.remote_mcp_tools(...)
       end
     end
   end

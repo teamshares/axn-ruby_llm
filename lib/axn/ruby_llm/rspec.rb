@@ -51,10 +51,14 @@ module Axn
           else
             allow(::RubyLLM).to receive(:chat).and_return(chat_instance)
           end
-          %i[with_instructions with_schema with_temperature with_provider_options with_tools].each do |method|
+          %i[with_instructions with_schema with_temperature with_provider_options with_tools
+             with_provider_tools with_tool_options].each do |method|
             allow(chat_instance).to receive(method).and_return(chat_instance)
           end
           allow(chat_instance).to receive(:ask).and_return(llm_message)
+          # A stubbed call has no real conversation for transcript_entries to walk -- matches how the
+          # disabled/stubbed-config path (Ask#stubbed_exposures) also exposes an empty transcript.
+          allow(chat_instance).to receive(:messages).and_return([])
           # Ask reads usage off the chat's own ledger (Chat#tokens / Chat#cost), not per-message --
           # a stubbed call is single-turn, so the ledger is just these values directly.
           allow(chat_instance).to receive(:tokens).and_return(

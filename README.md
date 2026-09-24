@@ -244,6 +244,60 @@ chat.ask("Create a widget called Sprocket")
 chat = RubyLLM.chat.with_tools(*Axn::RubyLLM.tools)
 ```
 
+### Provider-hosted tools and remote MCP (`provider_tools:`)
+
+`provider_tools:` forwards verbatim to RubyLLM's `Chat#with_provider_tools` — a Hash of alias => options. This is how the *provider* (not your app) runs a tool, including a **remote MCP server**: the provider connects to the server directly, with whatever `headers:` you pass, and its own tool calls happen inside the provider's request rather than yours.
+
+```ruby
+Axn::RubyLLM.ask(
+  prompt: "Why did this company's margin drop?",
+  provider_tools: {
+    mcp: {
+      name: "metabase", url: ENV.fetch("METABASE_MCP_URL"),
+      headers: { "X-API-KEY" => ENV.fetch("METABASE_MCP_API_KEY") },
+      allowed_tools: %w[search execute_sql],
+      require_approval: "never",
+    },
+  },
+)
+```
+
+See RubyLLM's `Chat#with_provider_tools` for the other aliases (`:web_search`, `:code_execution`, ...) and which providers support each one.
+
+### Pausing on approval before a provider-hosted call runs (`on_remote_tool_approval:`)
+
+Set `require_approval: "always"` (or per-tool) on a `provider_tools:` entry and the provider pauses before running the call, asking your app to approve or deny it first. Without a decision, `ask` would return whatever the chat produced at that pause — not a final answer. Pass `on_remote_tool_approval:`, a callable given each pending `RubyLLM::ToolCall` (`.name`, `.arguments`, `.remote?`), and `ask` drives the chat past every approval until it's genuinely done:
+
+```ruby
+Axn::RubyLLM.ask(
+  prompt: "...",
+  provider_tools: { mcp: { name: "metabase", url: ..., require_approval: "always" } },
+  on_remote_tool_approval: ->(tool_call) {
+    Rails.logger.info("[probe] #{tool_call.name}: #{tool_call.arguments}")
+    tool_call.name == "execute_sql" # only allow the tools you actually want to approve
+  },
+)
+```
+
+The same callback also resolves a **local** tool declared with `Tool.requires_approval` — `pending_approvals` doesn't distinguish where the call runs, only whether a decision is still owed.
+
+### Tool concurrency and other chat options (`tool_options:`)
+
+`tool_options:` forwards verbatim to `Chat#with_tool_options` (`choice:`, `calls:`, `concurrency:`). `concurrency: :threads` or `:fibers` runs one turn's **local** Axn tool calls in parallel — useful when a tool is pure I/O (an HTTP call, a remote MCP round-trip wrapped as a local tool) and each call doesn't share mutable state. It is not a good fit for a tool that checks out an ActiveRecord connection: parallel local calls check out one connection each, from a pool sized for the process's normal concurrency.
+
+```ruby
+Axn::RubyLLM.ask(prompt: "...", tools: [...], tool_options: { concurrency: :threads, calls: :many })
+```
+
+### Reading what the chat actually did (`transcript`)
+
+`ask` always exposes `transcript`: every message the chat exchanged (the system prompt excluded), each shaped as `{ role:, content:, tool_calls:, tool_call_id:, server_tool_calls: }`. `server_tool_calls` is where a provider-hosted MCP call's name, arguments, and result show up — your app never receives that request, so this is the only place to see what query actually ran.
+
+```ruby
+result = Axn::RubyLLM.ask(prompt: "...", provider_tools: { mcp: { ... } })
+result.transcript.flat_map { |m| m[:server_tool_calls]&.values || [] }.each { |c| puts "#{c.name}: #{c.arguments}" }
+```
+
 ### Tool naming
 
 The name is axn core's canonical, provider-safe `tool_name`: lowercased to `[a-z0-9_]`, leading configured prefixes stripped, snake_cased with single underscores, and never blank (`Admin::CreateWidget` → `admin_create_widget`; a truly anonymous Axn → `"tool"`). Declare `axn_name "..."` on the Axn to override the default. Because it's the same core derivation every adapter uses, a class wrapped by both `Axn::RubyLLM.wrap` and `Axn::MCP.wrap` advertises an identical name — the contract is declared once.

@@ -1,5 +1,34 @@
 # Changelog
 
+## [Unreleased]
+
+Built for the Vanguard Probe spike (os-app); not released as a gem version yet — see the PR
+description for the full pass-through ticket this branch starts.
+
+### Added
+
+- **`Axn::RubyLLM.remote_mcp_tools(url:, headers:, allowed_tools:, max_calls:, timeout:,
+  max_result_chars:)`** — connects to a remote MCP server (over the official `mcp` gem's HTTP
+  transport) from THIS app, rather than handing the server to a provider, and wraps its tools as
+  ordinary `::RubyLLM::Tool` subclasses so they sit next to Axn-wrapped local tools in the same
+  `tools:` array. `allowed_tools:` is required reasoning, not decoration — an MCP server's full
+  tool list can include write/admin tools an LLM has no business reaching. A shared call budget
+  (`max_calls:`) protects against an unbounded tool loop, since RubyLLM 2.0 removed `Tool::Halt` /
+  `halt_after:` and `ask` has no iteration cap of its own.
+- **`Ask` accepts `provider_tools:`** (forwarded to `Chat#with_provider_tools`) for the
+  provider-hosted alternative — a remote MCP server the *provider* connects to directly, e.g.
+  `provider_tools: { mcp: { name:, url:, headers:, allowed_tools:, require_approval: } }`.
+- **`Ask` accepts `tool_options:`** (forwarded to `Chat#with_tool_options` — `choice:`/`calls:`/
+  `concurrency:`).
+- **`Ask` accepts `on_remote_tool_approval:`**, a callable that drives a chat past
+  `Chat#awaiting_approval?` (approving/denying each pending call via `Chat#approve`/`#deny`) —
+  needed for `provider_tools:` with `require_approval:` set, or a local tool declared with
+  `Tool.requires_approval`.
+- **`Ask` always exposes `transcript`** — every message the chat exchanged (system prompt
+  excluded), shaped as `{ role:, content:, tool_calls:, tool_call_id:, server_tool_calls: }`. This
+  is the only place to see what a provider-hosted remote tool actually did, since that call never
+  reaches this app directly.
+
 ## [0.3.0] - 2026-09-22
 
 RubyLLM 2.0 is a breaking rewrite (renamed Tool DSL, restructured error hierarchy, a usage ledger

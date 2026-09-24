@@ -35,6 +35,7 @@ RSpec.describe Axn::RubyLLM::Ask do
     allow(chat_instance).to receive(:ask).with(prompt).and_return(llm_response)
     allow(chat_instance).to receive(:tokens).and_return(llm_tokens)
     allow(chat_instance).to receive(:cost).and_return(llm_cost)
+    allow(chat_instance).to receive(:messages).and_return([])
   end
 
   after do
@@ -545,6 +546,134 @@ RSpec.describe Axn::RubyLLM::Ask do
     end
   end
 
+  describe "provider_tools: and tool_options: pass-through" do
+    let(:mcp_options) { { mcp: { name: "metabase", url: "https://example.com/mcp", headers: { "X-API-KEY" => "secret" } } } }
+
+    it "forwards provider_tools: to with_provider_tools" do
+      expect(chat_instance).to receive(:with_provider_tools).with(**mcp_options).and_return(chat_instance)
+      described_class.call(prompt:, provider_tools: mcp_options)
+    end
+
+    it "does not call with_provider_tools when none is given" do
+      expect(chat_instance).not_to receive(:with_provider_tools)
+      described_class.call(prompt:)
+    end
+
+    it "forwards tool_options: to with_tool_options" do
+      expect(chat_instance).to receive(:with_tool_options).with(concurrency: :threads, calls: :many).and_return(chat_instance)
+      described_class.call(prompt:, tool_options: { concurrency: :threads, calls: :many })
+    end
+
+    it "does not call with_tool_options when none is given" do
+      expect(chat_instance).not_to receive(:with_tool_options)
+      described_class.call(prompt:)
+    end
+  end
+
+  describe "transcript" do
+    let(:tool_call) { instance_double(RubyLLM::ToolCall, name: "execute_sql", arguments: { "sql" => "select 1" }, remote?: false) }
+    let(:assistant_message) do
+      instance_double(RubyLLM::Message, role: :assistant, content: nil, tool_calls: { "call_1" => tool_call },
+                                        tool_call_id: nil, server_tool_calls: nil)
+    end
+    let(:tool_result_message) do
+      instance_double(RubyLLM::Message, role: :tool, content: "1", tool_calls: nil, tool_call_id: "call_1", server_tool_calls: nil)
+    end
+    let(:system_message) do
+      instance_double(RubyLLM::Message, role: :system, content: "You are helpful.", tool_calls: nil, tool_call_id: nil, server_tool_calls: nil)
+    end
+
+    before do
+      allow(llm_response).to receive_messages(role: :assistant, tool_calls: nil, tool_call_id: nil, server_tool_calls: nil)
+      allow(chat_instance).to receive(:messages).and_return([system_message, assistant_message, tool_result_message, llm_response])
+    end
+
+    it "excludes the system message and reshapes every other message into a plain Hash" do
+      expected_tool_call = { name: "execute_sql", arguments: { "sql" => "select 1" }, remote: false }
+      expect(result.transcript).to eq([
+                                        { role: :assistant, content: nil, tool_calls: { "call_1" => expected_tool_call },
+                                          tool_call_id: nil, server_tool_calls: nil },
+                                        { role: :tool, content: "1", tool_calls: nil, tool_call_id: "call_1", server_tool_calls: nil },
+                                        { role: :assistant, content: "Here is the summary.", tool_calls: nil, tool_call_id: nil, server_tool_calls: nil },
+                                      ])
+    end
+
+    context "when disabled (stubbed path)" do
+      before { Axn::RubyLLM.configure { |c| c.enabled = false } }
+
+      it "exposes an empty transcript" do
+        expect(result.transcript).to eq([])
+      end
+    end
+  end
+
+  describe "on_remote_tool_approval:" do
+    let(:pending_call) { instance_double(RubyLLM::ToolCall, name: "execute_sql", arguments: { "sql" => "select 1" }, remote?: true) }
+    let(:resumed_message) { instance_double(RubyLLM::Message, content: "resumed answer", parsed: nil, model: llm_model_id) }
+
+    before do
+      allow(chat_instance).to receive(:messages).and_return([])
+    end
+
+    context "when the chat pauses on a pending approval" do
+      before do
+        # First #ask parks on the approval; the approval decision lets a subsequent #complete finish it.
+        call_count = 0
+        allow(chat_instance).to receive(:awaiting_approval?) do
+          call_count += 1
+          call_count == 1
+        end
+        allow(chat_instance).to receive(:pending_approvals).and_return([pending_call])
+        allow(chat_instance).to receive(:complete).and_return(resumed_message)
+        allow(chat_instance).to receive(:approve)
+        allow(chat_instance).to receive(:deny)
+      end
+
+      it "approves when the callback returns truthy, then resumes with #complete" do
+        expect(chat_instance).to receive(:approve).with(pending_call)
+        expect(chat_instance).not_to receive(:deny)
+
+        result = described_class.call(prompt:, on_remote_tool_approval: ->(_tool_call) { true })
+
+        expect(result).to be_ok
+        expect(result.raw_message).to eq(resumed_message)
+      end
+
+      it "denies when the callback returns falsy" do
+        expect(chat_instance).to receive(:deny).with(pending_call)
+        expect(chat_instance).not_to receive(:approve)
+
+        described_class.call(prompt:, on_remote_tool_approval: ->(_tool_call) { false })
+      end
+
+      it "hands the callback the pending ToolCall" do
+        seen = nil
+        described_class.call(prompt:, on_remote_tool_approval: ->(tool_call) { seen = tool_call })
+        expect(seen).to eq(pending_call)
+      end
+    end
+
+    context "when the chat never pauses on an approval" do
+      before { allow(chat_instance).to receive(:awaiting_approval?).and_return(false) }
+
+      it "does not drive the loop or touch approve/deny" do
+        expect(chat_instance).not_to receive(:complete)
+        expect(chat_instance).not_to receive(:approve)
+        expect(chat_instance).not_to receive(:deny)
+
+        result = described_class.call(prompt:, on_remote_tool_approval: ->(_tool_call) { true })
+        expect(result.raw_message).to eq(llm_response)
+      end
+    end
+
+    context "without on_remote_tool_approval" do
+      it "never checks awaiting_approval? -- ask's own result is final, matching pre-existing behavior" do
+        expect(chat_instance).not_to receive(:awaiting_approval?)
+        result
+      end
+    end
+  end
+
   context "across a tool loop (multiple model round-trips in one ask)" do
     let(:final_turn) { instance_double(RubyLLM::Message, content: "final answer", parsed: nil, model: llm_model_id) }
     let(:llm_tokens) { instance_double(RubyLLM::Tokens, input: 150, output: 30, cache_read: nil, cache_write: nil) }
@@ -602,6 +731,7 @@ RSpec.describe "Axn::RubyLLM::Ask OTel attribute enrichment" do
     allow(chat_instance).to receive(:ask).and_return(llm_response)
     allow(chat_instance).to receive(:tokens).and_return(llm_tokens)
     allow(chat_instance).to receive(:cost).and_return(llm_cost)
+    allow(chat_instance).to receive(:messages).and_return([])
     Axn.config.tracer = fake_axn_tracer
   end
 
