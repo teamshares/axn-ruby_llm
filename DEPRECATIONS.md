@@ -8,8 +8,8 @@ A living list of deprecated APIs scheduled for removal. When you deprecate somet
 | -------------- | ----------- | -------- | ------------- | --------- |
 | `render_as:` wrap kwarg + `render_as` setting (value `:text`) | `present_as:` / `present_as` setting (value `:message`) | `lib/axn/ruby_llm/tool_adapter.rb` (`validate_present_as_kwargs!`, `wrap`) | unreleased | 1.0 |
 | `provider_params:` wrap kwarg + `provider_params` setting | `provider_options:` / `provider_options` setting | `lib/axn/ruby_llm/tool_adapter.rb` (`wrap`, `build_tool_class`) | 0.3.0 | 1.0 |
-| `Ask` exposure `input_tokens` | `uncached_input_tokens` (same value) — or `total_input_tokens` for prompt size | `lib/axn/ruby_llm/ask.rb` (`exposes`, `usage_exposures`, `stubbed_exposures`) | unreleased | 1.0 |
-| `Ask` exposure `prompt_tokens` | `total_input_tokens` (same value) | `lib/axn/ruby_llm/ask.rb` (`exposes`, `usage_exposures`, `stubbed_exposures`) | unreleased | 1.0 |
+| `Ask` exposure `input_tokens` | `uncached_input_tokens` (same value) — or `total_input_tokens` for prompt size | `lib/axn/ruby_llm/ask.rb` (`exposes`, `usage_exposures`, `stubbed_exposures`) | 0.4.0 | 1.0 |
+| `Ask` exposure `prompt_tokens` | `total_input_tokens` (same value) | `lib/axn/ruby_llm/ask.rb` (`exposes`, `usage_exposures`, `stubbed_exposures`) | 0.4.0 | 1.0 |
 
 The `render_as` → `present_as` rename (and value `:text` → `:message`) unifies the structured-vs-message render toggle with axn-mcp's `present_as`. This one **raises** rather than warning — it's a pre-1.0 tool-adapter API that never shipped in a release, so a leftover `render_as:` is a hard error with a pointer (`validate_present_as_kwargs!`), not a silent shim. The `render_as` config setting was hard-removed, so `configure(:ruby_llm) { |c| c.render_as = ... }` raises via axn core's config DSL. `provider_params:` follows the same raising pattern (pre-1.0, never a warn-and-alias).
 

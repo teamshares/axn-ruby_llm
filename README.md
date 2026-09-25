@@ -2,23 +2,27 @@
 
 Call LLMs from [Axn](https://github.com/teamshares/axn) actions using [RubyLLM](https://github.com/crmne/ruby_llm), with declarative error handling, schema-based structured output, configurable defaults, and cost/token tracking — and wrap any Axn as a `RubyLLM::Tool` a chat can call.
 
-> **RubyLLM 2.0 required.** As of `0.3.0`, this gem requires `ruby_llm >= 2.0, < 3.0` and no longer supports RubyLLM 1.x — see [CHANGELOG.md](CHANGELOG.md) for the full breaking-change rundown if you're upgrading from an earlier `axn-ruby_llm` release.
+> **RubyLLM 2.0 required.** As of `0.3.0`, this gem requires `ruby_llm >= 2.0, < 3.0` and no longer supports RubyLLM 1.x.
+>
+> **Upgrading to 0.4.0?** Two behaviour changes: a response cut off by the output token limit or blocked by a content filter now **fails** instead of succeeding, and the OpenTelemetry attribute `gen_ai.usage.input_tokens` now includes cached tokens. `input_tokens` / `prompt_tokens` are deprecated in favour of `uncached_input_tokens` / `total_input_tokens`. See [CHANGELOG.md](CHANGELOG.md) for the full list and what to check.
 
 Part of the `axn-*` extension ecosystem — see also [axn-mcp](https://github.com/teamshares/axn-mcp).
 
 ### Why use this over calling RubyLLM directly?
 
-Four things you'd otherwise hand-build:
+Five things you'd otherwise hand-build:
 
-1. **Structured error handling.** The Axn error DSL declaratively maps `RateLimitError`, `JSON::ParserError`, and generic `StandardError` to clean failure messages. Callers check `result.ok?` instead of wrapping every call in `begin/rescue`.
+1. **Structured error handling.** The Axn error DSL declaratively maps `RateLimitError`, `JSON::ParserError`, truncated or content-filtered responses, and generic `StandardError` to clean failure messages. Callers check `result.ok?` instead of wrapping every call in `begin/rescue`.
 
-2. **Production gating.** A single `c.enabled = -> { Rails.env.production? }` in an initializer stubs every LLM call in non-prod environments — no per-callsite guards needed. The stub is typed (`stubbed: true`, `input_tokens: 0`, etc.) so downstream code doesn't need to branch on it either.
+2. **Production gating.** A single `c.enabled = -> { Rails.env.production? }` in an initializer stubs every LLM call in non-prod environments — no per-callsite guards needed. The stub is typed (`stubbed: true`, `total_input_tokens: 0`, etc.) so downstream code doesn't need to branch on it either.
 
-3. **Cost/token tracking, exposed automatically.** Every call exposes `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `prompt_tokens` (the total), `cost`, and `cost_breakdown`, read straight off RubyLLM's own usage ledger (`Chat#tokens` / `Chat#cost`) — no manual model lookup, and a tool-call loop's retries and multiple round-trips are already aggregated for you. If your app uses OpenTelemetry, these values are also set as attributes on the existing `axn.call` span — no configuration required.
+3. **Cost/token tracking, exposed automatically.** Every call exposes `total_input_tokens`, `uncached_input_tokens`, `cache_read_tokens`, `cache_write_tokens`, `output_tokens`, `thinking_tokens`, `server_tool_use`, `cost`, and `cost_breakdown`, read straight off RubyLLM's own usage ledger (`Chat#tokens` / `Chat#cost`) — no manual model lookup, and a tool-call loop's retries and multiple round-trips are already aggregated for you. If your app uses OpenTelemetry, these values are also set as attributes on the existing `axn.call` span — no configuration required.
 
 4. **Author-once tools.** `Axn::RubyLLM.wrap` turns any Axn into a `RubyLLM::Tool` your chat can call — reuse the same Axn classes you already expose through [axn-mcp](https://github.com/teamshares/axn-mcp), or plain Axns, with no rewrite. The tool's name, JSON Schema, and argument validation all come from the Axn's own contract.
 
-> **Scope note:** This gem covers the subset of RubyLLM functionality that [Teamshares](https://github.com/teamshares) uses internally — single-turn chat, structured output, basic observability, and wrapping Axns as tools. It is intentionally minimal rather than a full-featured wrapper. Feedback and pull requests to extend it are very welcome.
+5. **Remote MCP tools.** `Axn::RubyLLM.remote_mcp_tools` wraps a remote MCP server's tools so they sit next to your Axn tools, with an allowlist, a call budget, timeouts, and bearer-token or OAuth auth. Or let the provider connect to the server itself with `provider_tools:`.
+
+> **Scope note:** `ask` runs one prompt through to a final answer and covers every `RubyLLM::Chat#with_*` setting, plus attachments, seeded history, streaming, and a tool-call cap (a spec fails CI when a RubyLLM release adds a method that isn't covered or explicitly skipped). For anything beyond one prompt-to-answer run, such as keeping a chat alive across turns, stepping the loop by hand, or RubyLLM's lifecycle callbacks, drive `RubyLLM::Chat` directly; see "Using wrapped tools with RubyLLM directly" below. RubyLLM's non-chat capabilities (embeddings, images, transcription, and so on) aren't wrapped. Feedback and pull requests are very welcome.
 
 ---
 
@@ -471,9 +475,11 @@ The response is the only required argument — pass it positionally (as above) o
 stub_axn_ruby_llm({ "company_id" => 42 }, schema: CompanyMatch)
 stub_axn_ruby_llm("...", model: "gpt-4o", input_tokens: 100, output_tokens: 50, cost: 0.0023)
 stub_axn_ruby_llm("...", cache_read_tokens: 500, cache_write_tokens: 200)
+stub_axn_ruby_llm("...", thinking_tokens: 300, server_tool_use: { "web_search_requests" => 1 })
+stub_axn_ruby_llm("partial", finish_reason: :max_tokens)  # exercises Ask's truncation failure
 ```
 
-Remaining keywords: `model:`, `schema:`, `input_tokens:`, `output_tokens:`, `cache_read_tokens:`, `cache_write_tokens:`, `cost:`. Returns the stubbed chat instance double for further assertions if you need it.
+Remaining keywords: `model:`, `schema:`, `input_tokens:` (RubyLLM's uncached count, so it becomes `uncached_input_tokens`), `output_tokens:`, `cache_read_tokens:`, `cache_write_tokens:`, `thinking_tokens:`, `server_tool_use:`, `cost:`, and `finish_reason:` (default `:stop`). It stubs every `RubyLLM::Chat#with_*` method, so specs can pass any `Ask` option. Returns the stubbed chat instance double for further assertions if you need it.
 
 ## OpenTelemetry
 
@@ -514,7 +520,9 @@ When disabled, `Axn::RubyLLM.ask` returns a **success** result with obvious stub
 |---|---|
 | `response` | `"stubbed response value"` (plain) / `{ "stubbed" => true }` (`schema:`) |
 | `raw_message` | Stub struct with `.content`, `.tokens` (a real `RubyLLM::Tokens`, all zero), `.model`, `.parsed` |
-| `input_tokens` / `output_tokens` / `cache_read_tokens` / `cache_write_tokens` / `prompt_tokens` | `0` |
+| `total_input_tokens` / `uncached_input_tokens` / `cache_read_tokens` / `cache_write_tokens` / `output_tokens` | `0` (the deprecated `input_tokens` / `prompt_tokens` too) |
+| `thinking_tokens` / `server_tool_use` / `finish_reason` | `nil` |
+| `transcript` | `[]` |
 | `cost` | `0.0` |
 | `cost_breakdown` | `nil` |
 | `stubbed` | `true` |

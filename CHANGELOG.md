@@ -2,97 +2,109 @@
 
 ## [Unreleased]
 
-Grew out of the Vanguard Probe spike (os-app); rounded out by PRO-3518 so the pass-through
-surface ships as one release. Not released as a gem version yet.
+## [0.4.0] - 2026-09-25
+
+`Ask` now covers all of `RubyLLM::Chat`'s settings, plus attachments, seeded history, streaming, and
+a tool-call cap, and the gem gains app-side remote MCP tools. Most of this is additive, but three
+behaviour changes need checking on upgrade.
+
+### ⚠️ Breaking changes
+
+- **Truncated or content-filtered responses now fail instead of succeeding.** A response cut off by
+  the output token limit (`finish_reason: :max_tokens`) now fails with "Response was cut off by the
+  output token limit before it finished". One blocked by a provider content filter fails with
+  "Response was blocked by the provider's content filter". Both used to come back as a success
+  carrying partial or empty text; with `schema:`, truncation surfaced as a misleading "Response was
+  not valid JSON". Usage, `cost`, `raw_message`, `transcript` and `finish_reason` are still exposed
+  on the failure.
+  **What to check:** callers that relied on partial text from a truncated response should handle
+  the failure, or raise `max_output_tokens:`.
+- **The OpenTelemetry attribute `gen_ai.usage.input_tokens` now includes cached tokens.** It used to
+  carry RubyLLM's uncached count, which under-counts badly under prompt caching (e.g. 9 instead of
+  ~58k on a `gpt-5.6` tool loop). It now carries `total_input_tokens` (uncached + cache reads + cache
+  writes), matching the OTel GenAI definition. New span attributes:
+  `gen_ai.usage.cache_read.input_tokens`, `gen_ai.usage.cache_creation.input_tokens`, and
+  `axn.ruby_llm.version`.
+  **What to check:** dashboards or alerts summing `gen_ai.usage.input_tokens` will step up as each
+  service upgrades. Filter on `@axn.ruby_llm.version:*` to see only spans with the new meaning. Cost
+  attributes are unchanged.
+- **Specs that stub `RubyLLM::Chat` or `RubyLLM::Message` directly** (rather than using
+  `stub_axn_ruby_llm`) may need updating. `Ask` now calls `chat.ask(prompt, with: nil)`, reads
+  `finish_reason`, `max_tokens?` and `content_filtered?` on the final message, and reads `thinking`
+  and `server_tool_use` from `chat.tokens`. A verifying double missing these fails with an
+  unexpected-message error.
+  **What to check:** switch those specs to `stub_axn_ruby_llm`, which handles all of this.
+
+### Deprecated
+
+- **`Ask`'s `input_tokens` and `prompt_tokens` exposures**, replaced by `uncached_input_tokens` and
+  `total_input_tokens` respectively, with unchanged values. The bare `input_tokens` name meant
+  uncached input in RubyLLM's convention but all input in OpenTelemetry's, so it's retired rather
+  than redefined. Both still work; removal is scheduled for 1.0 (see `DEPRECATIONS.md`).
 
 ### Added
 
-- **`Axn::RubyLLM.remote_mcp_tools(url:, headers:, allowed_tools:, max_calls:, timeout:,
-  max_result_chars:)`** — connects to a remote MCP server (over the official `mcp` gem's HTTP
-  transport) from THIS app, rather than handing the server to a provider, and wraps its tools as
-  ordinary `::RubyLLM::Tool` subclasses so they sit next to Axn-wrapped local tools in the same
-  `tools:` array. `allowed_tools:` is required reasoning, not decoration — an MCP server's full
-  tool list can include write/admin tools an LLM has no business reaching. A shared call budget
-  (`max_calls:`) protects against an unbounded tool loop, since RubyLLM 2.0 removed `Tool::Halt` /
-  `halt_after:` and `ask` has no iteration cap of its own.
-- **`Ask` accepts `provider_tools:`** (forwarded to `Chat#with_provider_tools`) for the
-  provider-hosted alternative — a remote MCP server the *provider* connects to directly, e.g.
-  `provider_tools: { mcp: { name:, url:, headers:, allowed_tools:, require_approval: } }`.
-- **`Ask` accepts `tool_options:`** (forwarded to `Chat#with_tool_options` — `choice:`/`calls:`/
-  `concurrency:`).
-- **`Ask` accepts `on_remote_tool_approval:`**, a callable that drives a chat past
-  `Chat#awaiting_approval?` (approving/denying each pending call via `Chat#approve`/`#deny`) —
-  needed for `provider_tools:` with `require_approval:` set, or a local tool declared with
-  `Tool.requires_approval`.
-- **`Ask` always exposes `transcript`** — every message the chat exchanged (system prompt
-  excluded), shaped as `{ role:, content:, tool_calls:, tool_call_id:, server_tool_calls: }`. This
-  is the only place to see what a provider-hosted remote tool actually did, since that call never
-  reaches this app directly.
-- **`Ask` exposes `finish_reason`, `thinking_tokens` and `server_tool_use`.** The last two come
-  from RubyLLM's chat-wide usage ledger; `server_tool_use` holds per-use counters for
-  provider-hosted tools (e.g. web searches).
-- **`stub_axn_ruby_llm` accepts `finish_reason:`, `thinking_tokens:` and `server_tool_use:`**, so
-  specs can exercise the truncation/filter failures and the new usage fields.
-- **`remote_mcp_tools` closes its connection when setup fails.** If the handshake, `tools/list`, or
-  building the tool classes raises, the transport is closed before the error propagates, so a
-  retrying caller no longer leaks HTTP sessions or SSE listener threads.
-- **`Ask` now covers the rest of `RubyLLM::Chat`'s `with_*` surface** (PRO-3518). Each input is
-  forwarded only when given:
-  - `provider:`, `protocol:`, `assume_model_exists:`, `context:` → `RubyLLM.chat(...)`, alongside `model:`
-  - `fallbacks:` / `fallback_on:` → `with_fallbacks(*fallbacks, on:)`
-  - `max_output_tokens:` → `with_max_output_tokens`
-  - `thinking:` → `with_thinking`
-  - `citations:` → `with_citations`
-  - `caching:` → `with_caching`
-  - `compaction:` → `with_compaction`
-  - `end_user:` → `with_end_user`
-  - `provider_options:` → `with_provider_options`
-  - `headers:` → `with_headers`
+**`Ask` options.** Every public `RubyLLM::Chat#with_*` method now has a matching input, forwarded
+only when given:
 
-  `thinking:`, `citations:`, `caching:`, and `compaction:` forward an explicit `false` as well.
-- **`Ask` accepts `cache_system_prompt:`**, which marks the system prompt as a prompt-cache boundary
-  (`with_instructions(..., cache_until_here: true)`).
-- **`Ask` accepts `attachments:`**, which is passed to `Chat#ask` as `with:` (files, paths, or URLs).
-- **`Ask` accepts `history:`**, prior turns seeded through `Chat#messages=` before the prompt.
-  `transcript` leaves them out.
-- **`Ask` accepts `on_chunk:`**, a callable given each streamed `RubyLLM::Chunk`. `response` is still
-  the complete message, so `schema:` is unaffected.
-- **`Ask` accepts `max_tool_calls:`**, a soft cap on app-executed tool calls per `ask`, shared
-  across every tool. Past the cap, each call returns an error result telling the model to wrap up.
-- **`remote_mcp_tools` accepts `bearer_token:`** (a String, or a callable run on every request so
-  the caller can rotate it) **and `oauth:`** (an `mcp`-gem `OAuth::Provider` /
-  `ClientCredentialsProvider`, passed through to `MCP::Client::HTTP`). Both require an https or
-  loopback URL.
+- `provider:`, `protocol:`, `assume_model_exists:`, `context:` → `RubyLLM.chat(...)`, alongside
+  `model:`
+- `fallbacks:` / `fallback_on:` → `with_fallbacks(*fallbacks, on:)`
+- `max_output_tokens:` → `with_max_output_tokens`
+- `thinking:` → `with_thinking`; `citations:` → `with_citations`; `caching:` → `with_caching`;
+  `compaction:` → `with_compaction`. These four also forward an explicit `false`.
+- `end_user:` → `with_end_user`; `provider_options:` → `with_provider_options`; `headers:` →
+  `with_headers`
+- `provider_tools:` → `with_provider_tools` (e.g. a provider-hosted remote MCP server:
+  `{ mcp: { name:, url:, headers:, allowed_tools:, require_approval: } }`); `tool_options:` →
+  `with_tool_options`
+- `cache_system_prompt: true` → `with_instructions(..., cache_until_here: true)`
+
+**Beyond the `with_*` methods:**
+
+- `attachments:` is passed to `Chat#ask` as `with:` (paths, URLs, or IO).
+- `history:` seeds earlier turns before the prompt; `transcript` leaves them out.
+- `on_chunk:` receives each streamed `RubyLLM::Chunk`. `response` is still the complete message, so
+  `schema:` is unaffected.
+- `max_tool_calls:` is a soft cap on app-executed tool calls per `ask`, shared across every tool.
+  Past the cap, each call returns an error result telling the model to wrap up.
+- `on_remote_tool_approval:` approves or denies each call waiting on `Chat#awaiting_approval?`
+  (provider-hosted calls with `require_approval:`, or local tools declared with
+  `Tool.requires_approval`) and drives the chat to completion.
+
+**New result fields:** `transcript` (every message the chat exchanged, including the provider-hosted
+calls a remote MCP server ran), `total_input_tokens`, `uncached_input_tokens`, `thinking_tokens`,
+`server_tool_use` (per-use counters for provider-hosted tools, such as web searches), and
+`finish_reason`.
+
+**`Axn::RubyLLM.remote_mcp_tools(url:, ...)`** connects to a remote MCP server from this app (using
+the official `mcp` gem) and wraps its tools as `RubyLLM::Tool`s, so they sit next to Axn tools in
+`tools:`.
+
+- `allowed_tools:` limits which of the server's tools are exposed; pass it, since a server's full
+  list can include write/admin tools.
+- `max_calls:` is a call budget shared across the toolset for its lifetime; connect one toolset per
+  request for a per-request cap. `timeout:` and `max_result_chars:` bound each call.
+- Auth: static `headers:`; `bearer_token:` (a String, or a callable run on every request so the
+  caller can rotate it); or `oauth:` (an `mcp`-gem `OAuth::Provider` / `ClientCredentialsProvider`,
+  passed through). Token auth requires an https or loopback URL.
+- If setup fails, the connection is closed before the error propagates.
+
+**`stub_axn_ruby_llm`** accepts `finish_reason:`, `thinking_tokens:` and `server_tool_use:`.
+
+**RubyLLM parity spec.** `spec/axn/ruby_llm/ruby_llm_parity_spec.rb` classifies every public method
+on `RubyLLM::Chat`, `RubyLLM::Tokens` and `RubyLLM::Message` as covered or intentionally skipped,
+and snapshots the signatures of the `Chat` methods `Ask` calls. A `ruby_llm` bump that adds or
+re-signatures one fails CI by name.
 
 ### Changed
 
-- **`Ask` fails on truncated or filtered responses instead of returning them as a success.** A
-  response cut off by the output token limit (`finish_reason: :max_tokens`) now fails with "Response
-  was cut off by the output token limit before it finished"; one blocked by a provider content
-  filter fails with "Response was blocked by the provider's content filter". Previously both came
-  back as a success (with `schema:`, truncation surfaced as a misleading "Response was not valid
-  JSON"). Usage, `cost`, `raw_message`, `transcript` and `finish_reason` are still exposed on the
-  failure.
-
-- **The OpenTelemetry attribute `gen_ai.usage.input_tokens` now reports all input tokens, cached
-  included** (the OTel GenAI definition). It used to report uncached input only, which under-counts
-  badly under prompt caching (e.g. 9 instead of ~58k on a `gpt-5.6` tool loop). New span attributes:
-  `gen_ai.usage.cache_read.input_tokens`, `gen_ai.usage.cache_creation.input_tokens`, and
-  `axn.ruby_llm.version` (to separate spans from before and after this change). Dashboards summing
-  `gen_ai.usage.input_tokens` will step up when a service upgrades.
-- **New `Ask` exposures `total_input_tokens` and `uncached_input_tokens`.** `input_tokens` (same
-  value as `uncached_input_tokens`) and `prompt_tokens` (same as `total_input_tokens`) are
-  deprecated, with no change to their values. The bare `input_tokens` name meant uncached input in
-  RubyLLM's convention but all input in OpenTelemetry's, so it's retired rather than redefined.
-
-- `Ask`'s `provider_tools:` input is now `sensitive: true`, since its `headers:` usually carry an
-  API key. axn no longer writes it to logs.
-- `stub_axn_ruby_llm` now stubs every public `RubyLLM::Chat#with_*` method (derived from the real
-  class, so new ones are picked up automatically), plus `messages=` and `awaiting_approval?`. It also
-  matches `model:` alongside the new model-resolution keywords, so specs that pass any `Ask` option
-  get the canned response instead of an unexpected-message error.
-- `RemoteMcp::Budget` is now `Axn::RubyLLM::ToolBudget`, shared by `remote_mcp_tools(max_calls:)`
-  and `max_tool_calls:`. It was never released.
+- `stub_axn_ruby_llm` now stubs every public `RubyLLM::Chat#with_*` method (taken from the class
+  itself, so future ones are covered), plus `messages=` and `awaiting_approval?`, and matches
+  `model:` alongside the model-resolution keywords. It returns a real `RubyLLM::Tokens` rather than
+  a verifying double.
+- `Ask`'s `provider_tools:`, `headers:` and `context:` inputs are marked `sensitive`, so axn keeps
+  them (and the API keys they usually carry) out of logs.
 
 ## [0.3.0] - 2026-09-22
 
