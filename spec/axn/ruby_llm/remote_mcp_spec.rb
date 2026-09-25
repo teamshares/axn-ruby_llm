@@ -77,6 +77,25 @@ RSpec.describe Axn::RubyLLM::RemoteMcp do
       described_class.remote_mcp_tools(url: "https://example.com/mcp")
     end
 
+    it "closes the transport and re-raises when tool discovery fails after connecting" do
+      allow(client).to receive(:tools).and_raise(MCP::Client::ServerError.new("tools/list failed", code: -32_603))
+      expect { described_class.remote_mcp_tools(url: "https://example.com/mcp") }.to raise_error(MCP::Client::ServerError)
+      expect(transport).to have_received(:close)
+    end
+
+    it "re-raises the original error even if closing the transport also fails" do
+      allow(client).to receive(:tools).and_raise(MCP::Client::ServerError.new("tools/list failed", code: -32_603))
+      allow(transport).to receive(:close).and_raise(Faraday::ServerError.new("500 on DELETE"))
+      expect { described_class.remote_mcp_tools(url: "https://example.com/mcp") }
+        .to raise_error(MCP::Client::ServerError, "tools/list failed")
+    end
+
+    it "closes the transport and re-raises when the handshake fails" do
+      allow(client).to receive(:connect).and_raise(Faraday::ConnectionFailed.new("refused"))
+      expect { described_class.remote_mcp_tools(url: "https://example.com/mcp") }.to raise_error(Faraday::ConnectionFailed)
+      expect(transport).to have_received(:close)
+    end
+
     it "wraps every remote tool as a ::RubyLLM::Tool subclass when no allowlist is given" do
       toolset = described_class.remote_mcp_tools(url: "https://example.com/mcp")
       expect(toolset.tools.map { |t| t.new.name }).to contain_exactly("search", "execute_sql", "create_dashboard")

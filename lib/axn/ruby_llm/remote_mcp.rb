@@ -62,22 +62,30 @@ module Axn
                              max_calls: DEFAULT_MAX_CALLS, timeout: DEFAULT_TIMEOUT, max_result_chars: DEFAULT_MAX_RESULT_CHARS)
           raise ArgumentError, "pass bearer_token: or oauth:, not both" if bearer_token && oauth
 
-          client = connect_client(url:, headers:, bearer_token:, oauth:, timeout:)
-          remote_tools = client.tools
-          remote_tools = remote_tools.select { |t| allowed_tools.include?(t.name) } if allowed_tools
+          client = build_client(url:, headers:, bearer_token:, oauth:, timeout:)
+          begin
+            client.connect
+            remote_tools = client.tools
+            remote_tools = remote_tools.select { |t| allowed_tools.include?(t.name) } if allowed_tools
 
-          # One budget per toolset, not per tool: the limit bounds total round-trips to this server, not
-          # calls to any single tool. It lives as long as the toolset and never resets, so connect a
-          # toolset per request (as the example above does) for a per-request cap.
-          budget = ToolBudget.new(max_calls, noun: "remote calls")
-          wrapped = remote_tools.map { |remote_tool| build_tool_class(remote_tool, client:, budget:, max_result_chars:) }
+            # One budget per toolset, not per tool: the limit bounds total round-trips to this server, not
+            # calls to any single tool. It lives as long as the toolset and never resets, so connect a
+            # toolset per request (as the example above does) for a per-request cap.
+            budget = ToolBudget.new(max_calls, noun: "remote calls")
+            wrapped = remote_tools.map { |remote_tool| build_tool_class(remote_tool, client:, budget:, max_result_chars:) }
 
-          Toolset.new(tools: wrapped, client:)
+            Toolset.new(tools: wrapped, client:)
+          rescue StandardError
+            # Until a Toolset is returned the caller has nothing to #close, so a failed handshake or
+            # tools/list would otherwise leak the HTTP session (and any SSE listener thread).
+            close_quietly(client.transport)
+            raise
+          end
         end
 
         private
 
-        def connect_client(url:, headers:, bearer_token:, oauth:, timeout:)
+        def build_client(url:, headers:, bearer_token:, oauth:, timeout:)
           # MCP::Client::HTTP enforces this itself for oauth:, but knows nothing about a token set by
           # the Faraday middleware below.
           raise ArgumentError, "bearer_token: requires an https (or loopback http) MCP URL" if bearer_token && !::MCP::Client::OAuth::Discovery.secure_url?(url)
@@ -87,7 +95,14 @@ module Axn
             faraday.options.open_timeout = timeout
             faraday.request :authorization, "Bearer", bearer_token if bearer_token
           end
-          ::MCP::Client.new(transport:).tap(&:connect)
+          ::MCP::Client.new(transport:)
+        end
+
+        # Cleanup on the failure path must never replace the error that got us there.
+        def close_quietly(transport)
+          transport.close
+        rescue StandardError => e
+          Axn.config.logger.warn { "[axn-ruby_llm] closing remote MCP transport after a failed setup also failed: #{e.class}: #{e.message}" }
         end
 
         def build_tool_class(remote_tool, client:, budget:, max_result_chars:)

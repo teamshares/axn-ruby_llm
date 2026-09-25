@@ -28,6 +28,9 @@ surface ships as one release. Not released as a gem version yet.
   excluded), shaped as `{ role:, content:, tool_calls:, tool_call_id:, server_tool_calls: }`. This
   is the only place to see what a provider-hosted remote tool actually did, since that call never
   reaches this app directly.
+- **`remote_mcp_tools` closes its connection when setup fails.** If the handshake, `tools/list`, or
+  building the tool classes raises, the transport is closed before the error propagates, so a
+  retrying caller no longer leaks HTTP sessions or SSE listener threads.
 - **`Ask` now covers the rest of `RubyLLM::Chat`'s `with_*` surface** (PRO-3518). Each input is
   forwarded only when given:
   - `provider:`, `protocol:`, `assume_model_exists:`, `context:` → `RubyLLM.chat(...)`, alongside `model:`
