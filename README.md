@@ -2,23 +2,27 @@
 
 Call LLMs from [Axn](https://github.com/teamshares/axn) actions using [RubyLLM](https://github.com/crmne/ruby_llm), with declarative error handling, schema-based structured output, configurable defaults, and cost/token tracking — and wrap any Axn as a `RubyLLM::Tool` a chat can call.
 
-> **RubyLLM 2.0 required.** As of `0.3.0`, this gem requires `ruby_llm >= 2.0, < 3.0` and no longer supports RubyLLM 1.x — see [CHANGELOG.md](CHANGELOG.md) for the full breaking-change rundown if you're upgrading from an earlier `axn-ruby_llm` release.
+> **RubyLLM 2.0 required.** As of `0.3.0`, this gem requires `ruby_llm >= 2.0, < 3.0` and no longer supports RubyLLM 1.x.
+>
+> **Upgrading to 0.4.0?** Two behaviour changes: a response cut off by the output token limit or blocked by a content filter now **fails** instead of succeeding, and the OpenTelemetry attribute `gen_ai.usage.input_tokens` now includes cached tokens. `input_tokens` / `prompt_tokens` are deprecated in favour of `uncached_input_tokens` / `total_input_tokens`. See [CHANGELOG.md](CHANGELOG.md) for the full list and what to check.
 
 Part of the `axn-*` extension ecosystem — see also [axn-mcp](https://github.com/teamshares/axn-mcp).
 
 ### Why use this over calling RubyLLM directly?
 
-Four things you'd otherwise hand-build:
+Five things you'd otherwise hand-build:
 
-1. **Structured error handling.** The Axn error DSL declaratively maps `RateLimitError`, `JSON::ParserError`, and generic `StandardError` to clean failure messages. Callers check `result.ok?` instead of wrapping every call in `begin/rescue`.
+1. **Structured error handling.** The Axn error DSL declaratively maps `RateLimitError`, `JSON::ParserError`, truncated or content-filtered responses, and generic `StandardError` to clean failure messages. Callers check `result.ok?` instead of wrapping every call in `begin/rescue`.
 
-2. **Production gating.** A single `c.enabled = -> { Rails.env.production? }` in an initializer stubs every LLM call in non-prod environments — no per-callsite guards needed. The stub is typed (`stubbed: true`, `input_tokens: 0`, etc.) so downstream code doesn't need to branch on it either.
+2. **Production gating.** A single `c.enabled = -> { Rails.env.production? }` in an initializer stubs every LLM call in non-prod environments — no per-callsite guards needed. The stub is typed (`stubbed: true`, `total_input_tokens: 0`, etc.) so downstream code doesn't need to branch on it either.
 
-3. **Cost/token tracking, exposed automatically.** Every call exposes `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `prompt_tokens` (the total), `cost`, and `cost_breakdown`, read straight off RubyLLM's own usage ledger (`Chat#tokens` / `Chat#cost`) — no manual model lookup, and a tool-call loop's retries and multiple round-trips are already aggregated for you. If your app uses OpenTelemetry, these values are also set as attributes on the existing `axn.call` span — no configuration required.
+3. **Cost/token tracking, exposed automatically.** Every call exposes `total_input_tokens`, `uncached_input_tokens`, `cache_read_tokens`, `cache_write_tokens`, `output_tokens`, `thinking_tokens`, `server_tool_use`, `cost`, and `cost_breakdown`, read straight off RubyLLM's own usage ledger (`Chat#tokens` / `Chat#cost`) — no manual model lookup, and a tool-call loop's retries and multiple round-trips are already aggregated for you. If your app uses OpenTelemetry, these values are also set as attributes on the existing `axn.call` span — no configuration required.
 
 4. **Author-once tools.** `Axn::RubyLLM.wrap` turns any Axn into a `RubyLLM::Tool` your chat can call — reuse the same Axn classes you already expose through [axn-mcp](https://github.com/teamshares/axn-mcp), or plain Axns, with no rewrite. The tool's name, JSON Schema, and argument validation all come from the Axn's own contract.
 
-> **Scope note:** This gem covers the subset of RubyLLM functionality that [Teamshares](https://github.com/teamshares) uses internally — single-turn chat, structured output, basic observability, and wrapping Axns as tools. It is intentionally minimal rather than a full-featured wrapper. Feedback and pull requests to extend it are very welcome.
+5. **Remote MCP tools.** `Axn::RubyLLM.remote_mcp_tools` wraps a remote MCP server's tools so they sit next to your Axn tools, with an allowlist, a call budget, timeouts, and bearer-token or OAuth auth. Or let the provider connect to the server itself with `provider_tools:`.
+
+> **Scope note:** `ask` runs one prompt through to a final answer and covers every `RubyLLM::Chat#with_*` setting, plus attachments, seeded history, streaming, and a tool-call cap (a spec fails CI when a RubyLLM release adds a method that isn't covered or explicitly skipped). For anything beyond one prompt-to-answer run, such as keeping a chat alive across turns, stepping the loop by hand, or RubyLLM's lifecycle callbacks, drive `RubyLLM::Chat` directly; see "Using wrapped tools with RubyLLM directly" below. RubyLLM's non-chat capabilities (embeddings, images, transcription, and so on) aren't wrapped. Feedback and pull requests are very welcome.
 
 ---
 
@@ -62,6 +66,42 @@ result = Axn::RubyLLM.ask(
   temperature: 0.2
 )
 ```
+
+### Chat options
+
+Every other `RubyLLM::Chat#with_*` setting has a matching `ask` input. Each is forwarded only when given, so omitting it leaves RubyLLM's default in place:
+
+| `ask` input | Forwarded to | Notes |
+|---|---|---|
+| `provider:`, `protocol:`, `assume_model_exists:` | `RubyLLM.chat` (alongside `model:`) | Choose the provider or wire protocol yourself instead of relying on autodetection. `assume_model_exists: true` skips the registry lookup and requires `provider:`. |
+| `context:` | `RubyLLM.chat(context:)` | A `RubyLLM.context { \|c\| ... }` whose API keys and base URLs replace the global config for this call. |
+| `fallbacks:`, `fallback_on:` | `with_fallbacks(*fallbacks, on: fallback_on)` | Models to try in order when generation fails. `fallback_on:` defaults to RubyLLM's transient provider and network errors. |
+| `cache_system_prompt:` | `with_instructions(system_prompt, cache_until_here: true)` | Marks the system prompt as an explicit prompt-cache boundary. Worth it for a long system prompt you reuse. |
+| `max_output_tokens:` | `with_max_output_tokens` | |
+| `thinking:` | `with_thinking` | `true`, `false`, or `{ effort:, budget:, display: }`. |
+| `citations:` | `with_citations` | Use with `attachments:` to get `raw_message.citations` back. |
+| `caching:` | `with_caching` | `true`, `false`, or `{ ttl:, id: }`. |
+| `compaction:` | `with_compaction` | `true`, `false`, or `{ at:, instructions:, pause_after: }`. |
+| `end_user:` | `with_end_user` | An opaque id. RubyLLM sends it as given, so never pass PII. |
+| `provider_options:` | `with_provider_options` | Raw keys merged into the request payload, e.g. `{ service_tier: "flex" }`. |
+| `headers:` | `with_headers` | Extra HTTP headers, e.g. a provider beta flag. |
+
+`thinking:`, `citations:`, `caching:`, and `compaction:` also forward an explicit `false`, which you'd use, for example, to turn off thinking on a model that enables it by default. `context:`, `headers:`, and `provider_tools:` are marked `sensitive`, so axn keeps them out of logs.
+
+### Attachments, history, and streaming
+
+```ruby
+Axn::RubyLLM.ask(
+  prompt: "What changed since last quarter?",
+  attachments: ["q3.pdf", "https://example.com/q2.pdf"],  # Chat#ask's with:
+  history: prior_turns,                                  # seeded before the prompt
+  on_chunk: ->(chunk) { print chunk.content },           # streamed as it arrives
+)
+```
+
+- **`attachments:`** is passed to `Chat#ask` as `with:`. RubyLLM reads a String from disk or fetches it over HTTP, so never pass an unvalidated, user-supplied path or URL.
+- **`history:`** is anything `Chat#messages=` accepts: `RubyLLM::Message`s, `{ role:, content: }` Hashes, or records that respond to `#to_llm`. `system_prompt:` replaces any system message in it. `transcript` includes only the turns this call exchanged, not the seeded ones.
+- **`on_chunk:`** receives each `RubyLLM::Chunk`. `response` and `raw_message` are still the complete message, so `schema:` works as usual. The stubbed (disabled) path never calls it.
 
 
 ### Structured output via schema
@@ -125,11 +165,13 @@ Every successful result exposes token usage and cost, read off RubyLLM's own usa
 ```ruby
 result = Axn::RubyLLM.ask(prompt: "...")
 
-result.input_tokens       # => 412  (non-cached input tokens only)
-result.cache_read_tokens  # => 80   (tokens served from cache; nil if provider didn't return them)
-result.cache_write_tokens # => 20   (tokens written to cache; nil if provider didn't return them)
-result.prompt_tokens      # => 512  (input_tokens + cache_read_tokens + cache_write_tokens — total request-side tokens, OpenAI-style)
-result.output_tokens      # => 78
+result.total_input_tokens    # => 512  (every input token: uncached + cache reads + cache writes — use this for prompt size)
+result.uncached_input_tokens # => 412  (standard-rate input only — RubyLLM's Tokens#input)
+result.cache_read_tokens     # => 80   (served from the provider's prompt cache)
+result.cache_write_tokens    # => 20   (written to the provider's prompt cache)
+result.output_tokens         # => 78
+result.thinking_tokens       # => 40   (reasoning tokens, where the provider reports them separately)
+result.server_tool_use       # => { "web_search_requests" => 2 }  (per-use counters for provider-hosted tools)
 result.cost               # => 0.00056 (Float USD total; nil if RubyLLM has no pricing for the model)
 
 # Full breakdown — RubyLLM::Cost, RubyLLM's own aggregated-cost object
@@ -139,11 +181,17 @@ result.cost_breakdown  # => #<Cost input: 0.0004, output: 0.00016, cache_read: 0
 result.raw_message     # => #<RubyLLM::Message ...>
 ```
 
-`cost` is `nil` when RubyLLM lacks pricing for the model (e.g. unknown/custom endpoints); `cost_breakdown` itself is still a `Cost` object in that case (only its component readers are `nil`). Token counts are nil only if the provider did not return them. `prompt_tokens` is nil only if all three input token fields are nil.
+Use `total_input_tokens` for prompt size. With prompt caching (explicit via `caching:`, or automatic on OpenAI's newer models), a tool loop's repeated prefix is billed as cache reads and new content as cache writes, so `uncached_input_tokens` can be single digits on a 50k-token prompt. `cost` prices each bucket at its own rate, so it's right either way.
+
+There's deliberately no plain `input_tokens` here: RubyLLM's `Tokens#input` means *uncached* input (a billing bucket), while OpenTelemetry's `gen_ai.usage.input_tokens` means *all* input, and each field name says which one it is. The older `input_tokens` (= `uncached_input_tokens`) and `prompt_tokens` (= `total_input_tokens`) still work but are deprecated; see [DEPRECATIONS.md](DEPRECATIONS.md).
+
+`cost` is `nil` when RubyLLM lacks pricing for the model (e.g. unknown/custom endpoints); `cost_breakdown` itself is still a `Cost` object in that case (only its component readers are `nil`). Token counts are nil only if the provider did not return them. `total_input_tokens` is nil only if all three input token fields are nil.
 
 ### Errors
 
 Errors are handled via Axn's declarative `error` DSL. Every failure shares a consistent `"LLM request failed: <reason>"` headline (the headline itself is configurable via `c.error_headline =`, e.g. to `"Something went wrong calling the LLM"`; the reasons below are unaffected):
+- The response hit the output token limit (`finish_reason: :max_tokens`) → `"LLM request failed: Response was cut off by the output token limit before it finished"`. This is checked before `schema:` parsing, so a truncated structured response reports this rather than a JSON error.
+- A provider content filter blocked the response (`finish_reason: :content_filter`) → `"LLM request failed: Response was blocked by the provider's content filter"`
 - `JSON::ParserError` → `"LLM request failed: Response was not valid JSON"`
 - `RubyLLM::RateLimitError` (HTTP 429, provider-agnostic) → `"LLM request failed: Rate limit reached: <message>"`
 - `RubyLLM::OverloadedError` / `ServiceUnavailableError` / `ServerError` (5xx, transient) → `"LLM request failed: Provider temporarily unavailable, try again later: <message>"`
@@ -151,6 +199,8 @@ Errors are handled via Axn's declarative `error` DSL. Every failure shares a con
 - `schema:` set but LLM returned non-JSON, or valid JSON that isn't an object → `"LLM request failed: Response was not valid JSON"` (malformed JSON text) or `"LLM request failed: Schema response was not valid JSON"` (valid JSON, wrong shape)
 - Any other known RubyLLM error — `RubyLLM::Error` (auth, bad request, payment, etc.), `RubyLLM::ConfigurationError`, `ModelNotFoundError`, `ModelRegistryError`, `PromptNotFoundError`, `InvalidRoleError`, `InvalidToolChoiceError`, `PendingToolCallsError`, `CancelledError`, `UnsupportedAttachmentError` — or `Faraday::Error` (network/transport failure) → `"LLM request failed: <message>"`
 - Any other `StandardError` (i.e. not a recognized RubyLLM/network failure — most likely a bug) → `"LLM request failed"`, with no exception detail leaked into the message
+
+The truncation and content-filter failures still expose the usage fields, `cost`, `raw_message`, `transcript` and `finish_reason`, since the call was paid for. `result.finish_reason` is also set on success (normally `:stop`).
 
 ## Tool adapter — wrap any Axn as a RubyLLM::Tool
 
@@ -234,7 +284,7 @@ Passing `ambient_context:` returns a tool **instance** (closing over that contex
 
 ### Using wrapped tools with RubyLLM directly
 
-`Axn::RubyLLM.ask(tools:)` covers the common single-call case. When you're driving `RubyLLM.chat` yourself — multi-turn conversations, streaming, or anything else beyond `ask` — register wrapped tools with RubyLLM's own `with_tools`, which accepts one or many `RubyLLM::Tool` classes/instances:
+`Axn::RubyLLM.ask` runs one prompt through to a final answer. Drive `RubyLLM.chat` yourself when you need more control than that: keeping one chat alive across turns, stepping the loop by hand (`ask_later`/`step`), or RubyLLM's lifecycle callbacks (`before_tool_call`, `after_tool_result`, `after_message`, `before_request`, `before_fallback`). Register wrapped tools with RubyLLM's own `with_tools`, which accepts one or many `RubyLLM::Tool` classes/instances:
 
 ```ruby
 chat = RubyLLM.chat.with_tools(Axn::RubyLLM.wrap(CreateWidget))
@@ -242,6 +292,90 @@ chat.ask("Create a widget called Sprocket")
 
 # or register everything under the :ruby_llm adapter at once:
 chat = RubyLLM.chat.with_tools(*Axn::RubyLLM.tools)
+```
+
+### Provider-hosted tools and remote MCP (`provider_tools:`)
+
+`provider_tools:` forwards verbatim to RubyLLM's `Chat#with_provider_tools` — a Hash of alias => options. This is how the *provider* (not your app) runs a tool, including a **remote MCP server**: the provider connects to the server directly, with whatever `headers:` you pass, and its own tool calls happen inside the provider's request rather than yours.
+
+```ruby
+Axn::RubyLLM.ask(
+  prompt: "Why did this company's margin drop?",
+  provider_tools: {
+    mcp: {
+      name: "metabase", url: ENV.fetch("METABASE_MCP_URL"),
+      headers: { "X-API-KEY" => ENV.fetch("METABASE_MCP_API_KEY") },
+      allowed_tools: %w[search execute_sql],
+      require_approval: "never",
+    },
+  },
+)
+```
+
+See RubyLLM's `Chat#with_provider_tools` for the other aliases (`:web_search`, `:code_execution`, ...) and which providers support each one.
+
+### App-side remote MCP (`Axn::RubyLLM.remote_mcp_tools`)
+
+`remote_mcp_tools` works the other way round: *your app* connects to the MCP server, using the official `mcp` gem, and wraps each of the server's tools as an ordinary `RubyLLM::Tool`. They sit next to your Axn tools in `tools:`, and every call is one your app makes, logs, times out, and can cap.
+
+```ruby
+toolset = Axn::RubyLLM.remote_mcp_tools(
+  url: ENV.fetch("METABASE_MCP_URL"),
+  headers: { "X-API-KEY" => ENV.fetch("METABASE_MCP_API_KEY") },
+  allowed_tools: %w[search execute_sql],  # pass it: a server's full list can include write/admin tools
+  max_calls: 20,                          # shared across the whole toolset, for its lifetime (default 20)
+)
+Axn::RubyLLM.ask(prompt: "...", tools: [*Axn::RubyLLM.tools, *toolset.tools])
+toolset.close
+```
+
+The `max_calls` budget never resets, so connect a fresh toolset per request (and `close` it) when you want a per-request cap; a toolset reused across requests shares one budget between them. `timeout:` (default 60s) and `max_result_chars:` (default 20,000) bound each call. When a server wants more than a static header for auth:
+
+- **`bearer_token:`** takes a String, or a callable that returns one, and sends it as `Authorization: Bearer <token>`. A callable runs on **every request**, so your code owns fetching, caching, and rotating the token, e.g. `bearer_token: -> { MyOAuthStore.current_token }`.
+- **`oauth:`** takes an `MCP::Client::OAuth::ClientCredentialsProvider` (machine-to-machine) or `MCP::Client::OAuth::Provider` (interactive authorization code + PKCE). It's passed straight to `MCP::Client::HTTP`, which handles discovery, token exchange, refresh, and retrying after a 401.
+
+Pass one or the other, not both. Both refuse a URL that is neither https nor loopback http.
+
+### Pausing on approval before a provider-hosted call runs (`on_remote_tool_approval:`)
+
+Set `require_approval: "always"` (or per-tool) on a `provider_tools:` entry and the provider pauses before running the call, asking your app to approve or deny it first. Without a decision, `ask` would return whatever the chat produced at that pause — not a final answer. Pass `on_remote_tool_approval:`, a callable given each pending `RubyLLM::ToolCall` (`.name`, `.arguments`, `.remote?`), and `ask` drives the chat past every approval until it's genuinely done:
+
+```ruby
+Axn::RubyLLM.ask(
+  prompt: "...",
+  provider_tools: { mcp: { name: "metabase", url: ..., require_approval: "always" } },
+  on_remote_tool_approval: ->(tool_call) {
+    Rails.logger.info("[probe] #{tool_call.name}: #{tool_call.arguments}")
+    tool_call.name == "execute_sql" # only allow the tools you actually want to approve
+  },
+)
+```
+
+The same callback also resolves a **local** tool declared with `Tool.requires_approval` — `pending_approvals` doesn't distinguish where the call runs, only whether a decision is still owed.
+
+### Tool concurrency and other chat options (`tool_options:`)
+
+`tool_options:` forwards verbatim to `Chat#with_tool_options` (`choice:`, `calls:`, `concurrency:`). `concurrency: :threads` or `:fibers` runs one turn's **local** Axn tool calls in parallel — useful when a tool is pure I/O (an HTTP call, a remote MCP round-trip wrapped as a local tool) and each call doesn't share mutable state. It is not a good fit for a tool that checks out an ActiveRecord connection: parallel local calls check out one connection each, from a pool sized for the process's normal concurrency.
+
+```ruby
+Axn::RubyLLM.ask(prompt: "...", tools: [...], tool_options: { concurrency: :threads, calls: :many })
+```
+
+### Capping tool calls (`max_tool_calls:`)
+
+`ask` has no limit of its own on how long the tool loop runs, because RubyLLM 2.0 removed `halt_after`. `max_tool_calls:` caps how many tool calls your app runs in one `ask`, counted across every tool in `tools:`. Once the cap is reached, each further call returns `{ error: "Tool call budget exhausted ... write your final answer with what you have so far." }` and the model is left to finish. The cap is soft on purpose: raising would throw away everything the chat had gathered. Calls to `remote_mcp_tools` tools count here as well as against their own `max_calls`. Provider-hosted calls (`provider_tools:`) never reach your app, so they aren't counted. The caller's tool instances are copied, not modified, so reusing a `wrap(axn, ambient_context:)` instance across calls is safe.
+
+```ruby
+Axn::RubyLLM.ask(prompt: "...", tools: Axn::RubyLLM.tools, max_tool_calls: 15)
+```
+
+### Reading what the chat actually did (`transcript`)
+
+`ask` always exposes `transcript`: every message the chat exchanged (the system prompt excluded), each shaped as `{ role:, content:, tool_calls:, tool_call_id:, server_tool_calls: }`. `server_tool_calls` is where a provider-hosted MCP call's name, arguments, and result show up — your app never receives that request, so this is the only place to see what query actually ran.
+
+```ruby
+result = Axn::RubyLLM.ask(prompt: "...", provider_tools: { mcp: { ... } })
+result.transcript.flat_map { |m| m[:server_tool_calls]&.values || [] }.each { |c| puts "#{c.name}: #{c.arguments}" }
 ```
 
 ### Tool naming
@@ -341,9 +475,11 @@ The response is the only required argument — pass it positionally (as above) o
 stub_axn_ruby_llm({ "company_id" => 42 }, schema: CompanyMatch)
 stub_axn_ruby_llm("...", model: "gpt-4o", input_tokens: 100, output_tokens: 50, cost: 0.0023)
 stub_axn_ruby_llm("...", cache_read_tokens: 500, cache_write_tokens: 200)
+stub_axn_ruby_llm("...", thinking_tokens: 300, server_tool_use: { "web_search_requests" => 1 })
+stub_axn_ruby_llm("partial", finish_reason: :max_tokens)  # exercises Ask's truncation failure
 ```
 
-Remaining keywords: `model:`, `schema:`, `input_tokens:`, `output_tokens:`, `cache_read_tokens:`, `cache_write_tokens:`, `cost:`. Returns the stubbed chat instance double for further assertions if you need it.
+Remaining keywords: `model:`, `schema:`, `input_tokens:` (RubyLLM's uncached count, so it becomes `uncached_input_tokens`), `output_tokens:`, `cache_read_tokens:`, `cache_write_tokens:`, `thinking_tokens:`, `server_tool_use:`, `cost:`, and `finish_reason:` (default `:stop`). It stubs every `RubyLLM::Chat#with_*` method, so specs can pass any `Ask` option. Returns the stubbed chat instance double for further assertions if you need it.
 
 ## OpenTelemetry
 
@@ -353,10 +489,13 @@ If your app uses OpenTelemetry, `axn` already wraps every action in an `axn.call
 |---|---|
 | `gen_ai.request.model` | The model requested |
 | `gen_ai.response.model` | The model that responded |
-| `gen_ai.usage.input_tokens` | Non-cached input token count |
+| `gen_ai.usage.input_tokens` | `total_input_tokens` — all input, cached included, per the OTel GenAI conventions |
+| `gen_ai.usage.cache_read.input_tokens` | `cache_read_tokens` (omitted when the provider doesn't report it) |
+| `gen_ai.usage.cache_creation.input_tokens` | `cache_write_tokens` (omitted when the provider doesn't report it) |
 | `gen_ai.usage.output_tokens` | Completion token count |
 | `gen_ai.usage.cost` | USD total (non-standard; useful for spend filtering) |
 | `axn.ruby_llm.stubbed` | `true` when production gating returned a stub |
+| `axn.ruby_llm.version` | This gem's version — separates spans from before and after a change in an attribute's meaning |
 | `axn.dimension.invoked_via` | `"ruby_llm"` — set by axn core on every tool call (including nested sub-Axns), not by this gem; lets you separate tool-driven traffic from ordinary direct `.call`s in the same span schema |
 
 For LLM-level tracing (individual `RubyLLM.chat` calls, tool calls, embeddings, prompt content), add [`opentelemetry-instrumentation-ruby_llm`](https://github.com/thoughtbot/opentelemetry-instrumentation-ruby_llm) to your own Gemfile and configure it per its README. It is not a dependency of this gem.
@@ -381,7 +520,9 @@ When disabled, `Axn::RubyLLM.ask` returns a **success** result with obvious stub
 |---|---|
 | `response` | `"stubbed response value"` (plain) / `{ "stubbed" => true }` (`schema:`) |
 | `raw_message` | Stub struct with `.content`, `.tokens` (a real `RubyLLM::Tokens`, all zero), `.model`, `.parsed` |
-| `input_tokens` / `output_tokens` / `cache_read_tokens` / `cache_write_tokens` / `prompt_tokens` | `0` |
+| `total_input_tokens` / `uncached_input_tokens` / `cache_read_tokens` / `cache_write_tokens` / `output_tokens` | `0` (the deprecated `input_tokens` / `prompt_tokens` too) |
+| `thinking_tokens` / `server_tool_use` / `finish_reason` | `nil` |
+| `transcript` | `[]` |
 | `cost` | `0.0` |
 | `cost_breakdown` | `nil` |
 | `stubbed` | `true` |

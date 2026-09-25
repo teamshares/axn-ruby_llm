@@ -35,6 +35,25 @@ RSpec.describe Axn::RubyLLM::RSpec::Helpers do
       end
     end
 
+    context "with every Ask input set" do
+      before { stub_axn_ruby_llm("canned", model: "gpt-4o") }
+
+      it "returns the canned response instead of tripping the verifying double" do
+        result = Axn::RubyLLM.ask(
+          prompt: "hi", model: "gpt-4o", provider: :openai, protocol: :responses, assume_model_exists: true,
+          attachments: ["a.pdf"], history: [{ role: :user, content: "earlier" }], system_prompt: "sys",
+          cache_system_prompt: true, temperature: 0.1, max_output_tokens: 10, thinking: { effort: :low },
+          citations: true, caching: { ttl: "1h" }, compaction: { at: 1000 }, fallbacks: ["gpt-4o-mini"],
+          fallback_on: [RubyLLM::ServerError], end_user: "u1", provider_options: { service_tier: "flex" },
+          headers: { "x-beta" => "1" }, on_chunk: ->(_chunk) {}, tools: [Class.new(RubyLLM::Tool) { def self.name = "T" }],
+          max_tool_calls: 3, provider_tools: { web_search: {} }, tool_options: { calls: :many },
+          on_remote_tool_approval: ->(_tool_call) { true }
+        )
+        expect(result.error).to be_nil
+        expect(result.response).to eq("canned")
+      end
+    end
+
     context "default cost behavior (no cost: passed)" do
       before { stub_axn_ruby_llm(response: "ok") }
 

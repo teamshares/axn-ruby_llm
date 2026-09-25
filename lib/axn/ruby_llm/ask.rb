@@ -6,20 +6,107 @@ module Axn
       include Axn
 
       expects :prompt
+      # Files/URLs attached to the prompt -- Chat#ask's `with:` (a path, URL, IO, or an Array of them).
+      # A String is read from disk or fetched over HTTP, so never pass an unvalidated user-supplied one.
+      expects :attachments, optional: true
+      # Prior turns to seed the chat with before `prompt` -- anything Chat#messages= accepts
+      # (RubyLLM::Message objects, `{ role:, content: }` Hashes, or records responding to #to_llm).
+      # Not echoed back in `transcript`, which covers only what this call exchanged.
+      expects :history, optional: true
       expects :schema, optional: true
       expects :model, optional: true
+      # Model resolution alongside `model:` (Chat.new's own keywords): `provider:` disambiguates a
+      # model several providers serve, `protocol:` overrides the wire protocol, and
+      # `assume_model_exists: true` skips the registry lookup (requires `provider:`).
+      expects :provider, optional: true
+      expects :protocol, optional: true
+      expects :assume_model_exists, optional: true
+      # A RubyLLM::Context (RubyLLM.context { |c| ... }) whose config -- API keys, base URLs --
+      # replaces the process-wide RubyLLM.config for this call.
+      expects :context, optional: true, sensitive: true
+      # Ordered models to retry on when generation fails (Chat#with_fallbacks); `fallback_on:` narrows
+      # the triggering error classes (default: RubyLLM's transient provider/network errors).
+      expects :fallbacks, optional: true
+      expects :fallback_on, optional: true
       expects :system_prompt, optional: true
+      # true marks the system prompt as an explicit prompt-cache boundary
+      # (with_instructions(cache_until_here: true)) -- worth it for a long, reused system prompt.
+      expects :cache_system_prompt, optional: true
       expects :temperature, optional: true
+      expects :max_output_tokens, optional: true
+      # true, false (disable for a model that thinks by default), or `{ effort:, budget:, display: }`.
+      expects :thinking, optional: true
+      # true to get `raw_message.citations` back from attached documents.
+      expects :citations, optional: true
+      # true, false, or `{ ttl:, id: }` -- provider prompt caching (Chat#with_caching).
+      expects :caching, optional: true
+      # true, false, or `{ at:, instructions:, pause_after: }` -- provider-side context compaction.
+      expects :compaction, optional: true
+      # An opaque end-user id for the provider's abuse monitoring -- sent as given, so never PII.
+      expects :end_user, optional: true
+      # Raw keys merged into the provider request payload (Chat#with_provider_options), e.g.
+      # `{ service_tier: "flex" }` -- distinct from a tool's own `provider_options`.
+      expects :provider_options, optional: true
+      # Extra HTTP headers on the completion request (e.g. a provider beta flag).
+      expects :headers, optional: true, sensitive: true
+      # A callable given each streamed RubyLLM::Chunk as it arrives. `response`/`raw_message` are still
+      # the complete message (RubyLLM assembles it), so `schema:` works unchanged. Never called on the
+      # disabled (stubbed) path.
+      expects :on_chunk, optional: true
       expects :tools, optional: true
+      # Caps how many tool calls this app executes in one ask, across every tool in `tools:`
+      # (including remote_mcp_tools ones, which also keep their own max_calls budget). Past the cap
+      # each call returns an error result telling the model to answer with what it has -- see
+      # ToolBudget. Provider-hosted calls (provider_tools:) never reach this app and aren't counted.
+      expects :max_tool_calls, optional: true
+      # Forwarded verbatim to Chat#with_provider_tools -- a Hash of alias => options, e.g.
+      # `provider_tools: { mcp: { name:, url:, headers:, allowed_tools:, require_approval: } }` for a
+      # provider-hosted remote MCP server, or `{ web_search: {} }`. See RubyLLM::Chat#with_provider_tools.
+      expects :provider_tools, optional: true, sensitive: true
+      # Forwarded verbatim to Chat#with_tool_options (choice:/calls:/concurrency:).
+      expects :tool_options, optional: true
+      # A callable given each pending ToolCall (from Chat#pending_approvals -- local tools declared
+      # with `requires_approval`, or provider-hosted remote calls awaiting an mcp_approval_request) and
+      # returning truthy to approve, falsy to deny. Required to drive a chat past #awaiting_approval? --
+      # without it, `llm_response` is whatever #ask returned when the loop first parked, and the
+      # response schema/tool loop never completes. Only meaningful alongside provider_tools using
+      # require_approval, or a local tool declared with `requires_approval`.
+      expects :on_remote_tool_approval, optional: true
 
       exposes :response
       exposes :raw_message
-      exposes :input_tokens, allow_nil: true
-      exposes :output_tokens, allow_nil: true
+      # A plain-Hash summary of every message the chat exchanged (system prompt excluded), in order:
+      # role, content, tool_calls (name/arguments/remote?), tool_call_id, and server_tool_calls (the
+      # provider-executed calls a hosted MCP server ran, e.g. Metabase queries). Built once per call
+      # from Chat#messages, which RubyLLM already retains -- this only shapes it for a caller that
+      # doesn't want to reach into raw RubyLLM::Message objects.
+      exposes :transcript, type: Array, allow_blank: true
+      # Input token fields deliberately avoid a bare `input_tokens` name: RubyLLM's Tokens#input is a
+      # billing bucket (standard-rate, non-cached input only), while OTel's gen_ai.usage.input_tokens
+      # is the whole prompt including cached tokens. Each name here says which one it is.
+      #
+      # All input tokens: uncached + cache_read + cache_write (the OTel meaning).
+      exposes :total_input_tokens, allow_nil: true
+      # Standard-rate input only -- RubyLLM's Tokens#input.
+      exposes :uncached_input_tokens, allow_nil: true
       exposes :cache_read_tokens, allow_nil: true
       exposes :cache_write_tokens, allow_nil: true
+      exposes :output_tokens, allow_nil: true
+      # Reasoning tokens, where the provider reports them separately (usually also counted in
+      # output_tokens when billed as output).
+      exposes :thinking_tokens, allow_nil: true
+      # Per-use counters for provider-hosted tools, e.g. { "web_search_requests" => 2 } -- billed per
+      # use, not per token.
+      exposes :server_tool_use, allow_nil: true
+      # Deprecated (see DEPRECATIONS.md): input_tokens == uncached_input_tokens,
+      # prompt_tokens == total_input_tokens.
+      exposes :input_tokens, allow_nil: true
       exposes :prompt_tokens, allow_nil: true
       exposes :cost, allow_nil: true
+      # The final message's normalized finish reason (:stop, :tool_calls, :max_tokens,
+      # :content_filter, ...). :max_tokens and :content_filter fail the call -- see
+      # fail_on_incomplete_response! -- with this still exposed.
+      exposes :finish_reason, allow_nil: true
       exposes :cost_breakdown, allow_nil: true
       exposes :stubbed, type: :boolean, default: false
 
@@ -76,38 +163,22 @@ module Axn
       before do
         if disabled?
           exposures = stubbed_exposures
-          record_otel_attributes!(
-            input_tokens: exposures[:input_tokens],
-            output_tokens: exposures[:output_tokens],
-            cost: exposures[:cost],
-            response_model: nil,
-            stubbed: true,
-          )
+          record_otel_attributes!(exposures, response_model: nil)
           # Reason attaches to the "LLM request completed" base via the parenthetical join: above.
           done!("using stubbed values - actual LLM request disabled", **exposures)
         end
       end
 
       def call
-        expose(
-          response: parsed_response,
-          raw_message: llm_response,
-          input_tokens: token_usage.input,
-          output_tokens: token_usage.output,
-          cache_read_tokens: token_usage.cache_read,
-          cache_write_tokens: token_usage.cache_write,
-          prompt_tokens: total_input_tokens,
-          cost_breakdown:,
-          cost: cost_breakdown&.total,
-          stubbed: false,
-        )
-        record_otel_attributes!(
-          input_tokens: token_usage.input,
-          output_tokens: token_usage.output,
-          cost: cost_breakdown&.total,
-          response_model: llm_response&.model,
-          stubbed: false,
-        )
+        # llm_response runs the chat; usage must be read after it -- token_usage/cost_breakdown
+        # memoize Chat#tokens/#cost, which are an empty ledger until #ask has run.
+        message = llm_response
+        usage = usage_exposures
+        record_otel_attributes!(usage, response_model: message&.model)
+        fail_on_incomplete_response!(message, usage)
+
+        expose(response: parsed_response, raw_message: message, transcript: transcript_entries,
+               finish_reason: message&.finish_reason, **usage)
       rescue ::RubyLLM::RateLimitError => e
         fail! "Rate limit reached: #{e.message}"
       end
@@ -123,11 +194,17 @@ module Axn
         {
           response: parsed_content || content,
           raw_message: StubMessage.new(content:, tokens: zero_tokens, model: "stubbed"),
-          input_tokens: 0,
-          output_tokens: 0,
+          transcript: [],
+          total_input_tokens: 0,
+          uncached_input_tokens: 0,
           cache_read_tokens: 0,
           cache_write_tokens: 0,
+          output_tokens: 0,
+          input_tokens: 0,
           prompt_tokens: 0,
+          thinking_tokens: nil,
+          server_tool_use: nil,
+          finish_reason: nil,
           cost: 0.0,
           cost_breakdown: nil,
           stubbed: true,
@@ -153,6 +230,40 @@ module Axn
       memo def token_usage = chat.tokens
       memo def cost_breakdown = chat.cost
 
+      # A truncated or filtered response is not an answer: returning it as a success hands callers
+      # partial text (or, with schema:, a misleading JSON parse error). Checked before
+      # parsed_response for that reason. Usage, cost and the raw message are still exposed, since
+      # the call was paid for.
+      def fail_on_incomplete_response!(message, usage)
+        reason =
+          if message&.max_tokens?
+            "Response was cut off by the output token limit before it finished"
+          elsif message&.content_filtered?
+            "Response was blocked by the provider's content filter"
+          end
+        return unless reason
+
+        fail!(reason, **usage, raw_message: message, transcript: transcript_entries, finish_reason: message.finish_reason)
+      end
+
+      def usage_exposures
+        total = total_input_tokens
+        {
+          total_input_tokens: total,
+          uncached_input_tokens: token_usage.input,
+          cache_read_tokens: token_usage.cache_read,
+          cache_write_tokens: token_usage.cache_write,
+          output_tokens: token_usage.output,
+          thinking_tokens: token_usage.thinking,
+          server_tool_use: token_usage.server_tool_use,
+          input_tokens: token_usage.input,
+          prompt_tokens: total,
+          cost_breakdown:,
+          cost: cost_breakdown&.total,
+          stubbed: false,
+        }
+      end
+
       # nil only when NO turn reported the field (preserving the "nil if the provider didn't return
       # it" contract); otherwise the summed count, treating a missing component as 0.
       def total_input_tokens
@@ -160,14 +271,72 @@ module Axn
         vals.all?(&:nil?) ? nil : vals.sum(&:to_i)
       end
 
-      memo def llm_response = chat.ask(prompt)
+      # Without on_remote_tool_approval, this is exactly #ask -- one #complete run, parked (like
+      # before this feature existed) if the chat lands on an unresolved approval. With it, drive
+      # #complete past every approval Chat#pending_approvals reports, until the loop truly finishes.
+      # Chat#complete already loops through ordinary tool calls on its own; this only extends that
+      # loop across the approval pauses it otherwise stops at.
+      memo def llm_response
+        message = chat.ask(prompt, with: attachments, &on_chunk)
+        return message unless on_remote_tool_approval
 
-      memo def chat
-        ::RubyLLM.chat(model: resolved_model).tap do |c|
-          c.with_instructions(system_prompt) if system_prompt
+        while chat.awaiting_approval?
+          chat.pending_approvals.each do |tool_call|
+            on_remote_tool_approval.call(tool_call) ? chat.approve(tool_call) : chat.deny(tool_call)
+          end
+          message = chat.complete(&on_chunk)
+        end
+        message
+      end
+
+      # provider:/protocol:/assume_model_exists:/context: go to Chat.new rather than a later
+      # #with_model/#with_context, so the model resolves once, against the right config.
+      #
+      # thinking:/citations:/caching:/compaction: forward `false` too (`unless nil?`, not `if`) --
+      # false is a real instruction (e.g. turn off thinking a model enables by default).
+      memo def chat # rubocop:disable Metrics/AbcSize
+        ::RubyLLM.chat(model: resolved_model, **{ provider:, protocol:, assume_model_exists:, context: }.compact).tap do |c|
+          seed_history(c) if history
+          c.with_instructions(system_prompt, **{ cache_until_here: cache_system_prompt }.compact) if system_prompt
           c.with_schema(resolved_schema) if schema
           c.with_temperature(temperature) if temperature
+          c.with_max_output_tokens(max_output_tokens) if max_output_tokens
+          c.with_thinking(thinking) unless thinking.nil?
+          c.with_citations(citations) unless citations.nil?
+          c.with_caching(caching) unless caching.nil?
+          c.with_compaction(compaction) unless compaction.nil?
+          c.with_fallbacks(*fallbacks, **{ on: fallback_on }.compact) if fallbacks
+          c.with_end_user(end_user) if end_user
+          c.with_provider_options(provider_options) if provider_options
+          c.with_headers(headers) if headers
           c.with_tools(*resolved_tools) if resolved_tools.any?
+          c.with_provider_tools(**provider_tools) if provider_tools
+          c.with_tool_options(**tool_options) if tool_options
+        end
+      end
+
+      # Runs before with_instructions, since Chat#messages= replaces the whole conversation -- the
+      # system prompt included -- and with_instructions then replaces any system message the history
+      # carried. The seeded count lets `transcript` skip what the caller already had.
+      def seed_history(chat)
+        chat.messages = history
+        @seeded_message_count = chat.messages.count { |m| m.role != :system }
+      end
+
+      # chat.messages already retains the whole exchange (RubyLLM's own Chat#tokens / Chat#cost read
+      # off it the same way) -- this only reshapes each Message into a plain Hash a caller can log or
+      # assert against without reaching into RubyLLM::Message/ToolCall objects. The system prompt is
+      # excluded: it's an Ask input the caller already has (system_prompt), not something the loop
+      # produced.
+      def transcript_entries
+        chat.messages.reject { |m| m.role == :system }.drop(@seeded_message_count || 0).map do |m|
+          {
+            role: m.role,
+            content: m.content.is_a?(String) ? m.content : nil,
+            tool_calls: m.tool_calls&.transform_values { |tc| { name: tc.name, arguments: tc.arguments, remote: tc.remote? } },
+            tool_call_id: m.tool_call_id,
+            server_tool_calls: m.server_tool_calls,
+          }
         end
       end
 
@@ -251,8 +420,14 @@ module Axn
       # straight in) and already-wrapped `::RubyLLM::Tool`s -- a class or an instance, the latter being
       # how you pass a tool that closed over explicit context via `Axn::RubyLLM.wrap(axn, ambient_context:)`.
       # RubyLLM's `with_tools` accepts either a class or an instance, so wrapped classes register as-is.
-      def resolved_tools
-        Array(tools).map { |tool| _as_ruby_llm_tool(tool) }
+      #
+      # Memoized: with max_tool_calls, every guarded tool must share the ONE budget built here.
+      memo def resolved_tools
+        wrapped = Array(tools).map { |tool| _as_ruby_llm_tool(tool) }
+        return wrapped unless max_tool_calls
+
+        budget = ToolBudget.new(max_tool_calls)
+        wrapped.map { |tool| budget.guard(tool) }
       end
 
       def _as_ruby_llm_tool(tool)
@@ -262,14 +437,21 @@ module Axn
         Axn::RubyLLM.wrap(tool)
       end
 
-      def record_otel_attributes!(input_tokens:, output_tokens:, cost:, response_model:, stubbed:)
+      # OTel GenAI semconv: gen_ai.usage.input_tokens "SHOULD include all types of input tokens,
+      # including cached tokens", with the cache counts as sub-totals of it -- so it gets
+      # total_input_tokens, never RubyLLM's uncached Tokens#input. annotate_span skips nil values.
+      # axn.ruby_llm.version separates spans from before/after a change in what an attribute means.
+      def record_otel_attributes!(usage, response_model:)
         Axn::Extensions::Tracing.annotate_span(
           "gen_ai.request.model" => resolved_model,
           "gen_ai.response.model" => response_model,
-          "gen_ai.usage.input_tokens" => input_tokens,
-          "gen_ai.usage.output_tokens" => output_tokens,
-          "gen_ai.usage.cost" => cost,
-          "axn.ruby_llm.stubbed" => stubbed,
+          "gen_ai.usage.input_tokens" => usage[:total_input_tokens],
+          "gen_ai.usage.cache_read.input_tokens" => usage[:cache_read_tokens],
+          "gen_ai.usage.cache_creation.input_tokens" => usage[:cache_write_tokens],
+          "gen_ai.usage.output_tokens" => usage[:output_tokens],
+          "gen_ai.usage.cost" => usage[:cost],
+          "axn.ruby_llm.stubbed" => usage[:stubbed],
+          "axn.ruby_llm.version" => Axn::RubyLLM::VERSION,
         )
       end
     end
