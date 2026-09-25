@@ -6,15 +6,60 @@ module Axn
       include Axn
 
       expects :prompt
+      # Files/URLs attached to the prompt -- Chat#ask's `with:` (a path, URL, IO, or an Array of them).
+      # A String is read from disk or fetched over HTTP, so never pass an unvalidated user-supplied one.
+      expects :attachments, optional: true
+      # Prior turns to seed the chat with before `prompt` -- anything Chat#messages= accepts
+      # (RubyLLM::Message objects, `{ role:, content: }` Hashes, or records responding to #to_llm).
+      # Not echoed back in `transcript`, which covers only what this call exchanged.
+      expects :history, optional: true
       expects :schema, optional: true
       expects :model, optional: true
+      # Model resolution alongside `model:` (Chat.new's own keywords): `provider:` disambiguates a
+      # model several providers serve, `protocol:` overrides the wire protocol, and
+      # `assume_model_exists: true` skips the registry lookup (requires `provider:`).
+      expects :provider, optional: true
+      expects :protocol, optional: true
+      expects :assume_model_exists, optional: true
+      # A RubyLLM::Context (RubyLLM.context { |c| ... }) whose config -- API keys, base URLs --
+      # replaces the process-wide RubyLLM.config for this call.
+      expects :context, optional: true, sensitive: true
+      # Ordered models to retry on when generation fails (Chat#with_fallbacks); `fallback_on:` narrows
+      # the triggering error classes (default: RubyLLM's transient provider/network errors).
+      expects :fallbacks, optional: true
+      expects :fallback_on, optional: true
       expects :system_prompt, optional: true
       expects :temperature, optional: true
+      expects :max_output_tokens, optional: true
+      # true, false (disable for a model that thinks by default), or `{ effort:, budget:, display: }`.
+      expects :thinking, optional: true
+      # true to get `raw_message.citations` back from attached documents.
+      expects :citations, optional: true
+      # true, false, or `{ ttl:, id: }` -- provider prompt caching (Chat#with_caching).
+      expects :caching, optional: true
+      # true, false, or `{ at:, instructions:, pause_after: }` -- provider-side context compaction.
+      expects :compaction, optional: true
+      # An opaque end-user id for the provider's abuse monitoring -- sent as given, so never PII.
+      expects :end_user, optional: true
+      # Raw keys merged into the provider request payload (Chat#with_provider_options), e.g.
+      # `{ service_tier: "flex" }` -- distinct from a tool's own `provider_options`.
+      expects :provider_options, optional: true
+      # Extra HTTP headers on the completion request (e.g. a provider beta flag).
+      expects :headers, optional: true, sensitive: true
+      # A callable given each streamed RubyLLM::Chunk as it arrives. `response`/`raw_message` are still
+      # the complete message (RubyLLM assembles it), so `schema:` works unchanged. Never called on the
+      # disabled (stubbed) path.
+      expects :on_chunk, optional: true
       expects :tools, optional: true
+      # Caps how many tool calls this app executes in one ask, across every tool in `tools:`
+      # (including remote_mcp_tools ones, which also keep their own max_calls budget). Past the cap
+      # each call returns an error result telling the model to answer with what it has -- see
+      # ToolBudget. Provider-hosted calls (provider_tools:) never reach this app and aren't counted.
+      expects :max_tool_calls, optional: true
       # Forwarded verbatim to Chat#with_provider_tools -- a Hash of alias => options, e.g.
       # `provider_tools: { mcp: { name:, url:, headers:, allowed_tools:, require_approval: } }` for a
       # provider-hosted remote MCP server, or `{ web_search: {} }`. See RubyLLM::Chat#with_provider_tools.
-      expects :provider_tools, optional: true
+      expects :provider_tools, optional: true, sensitive: true
       # Forwarded verbatim to Chat#with_tool_options (choice:/calls:/concurrency:).
       expects :tool_options, optional: true
       # A callable given each pending ToolCall (from Chat#pending_approvals -- local tools declared
@@ -187,27 +232,50 @@ module Axn
       # Chat#complete already loops through ordinary tool calls on its own; this only extends that
       # loop across the approval pauses it otherwise stops at.
       memo def llm_response
-        message = chat.ask(prompt)
+        message = chat.ask(prompt, with: attachments, &on_chunk)
         return message unless on_remote_tool_approval
 
         while chat.awaiting_approval?
           chat.pending_approvals.each do |tool_call|
             on_remote_tool_approval.call(tool_call) ? chat.approve(tool_call) : chat.deny(tool_call)
           end
-          message = chat.complete
+          message = chat.complete(&on_chunk)
         end
         message
       end
 
-      memo def chat
-        ::RubyLLM.chat(model: resolved_model).tap do |c|
+      # provider:/protocol:/assume_model_exists:/context: go to Chat.new rather than a later
+      # #with_model/#with_context, so the model resolves once, against the right config.
+      #
+      # thinking:/citations:/caching:/compaction: forward `false` too (`unless nil?`, not `if`) --
+      # false is a real instruction (e.g. turn off thinking a model enables by default).
+      memo def chat # rubocop:disable Metrics/AbcSize
+        ::RubyLLM.chat(model: resolved_model, **{ provider:, protocol:, assume_model_exists:, context: }.compact).tap do |c|
+          seed_history(c) if history
           c.with_instructions(system_prompt) if system_prompt
           c.with_schema(resolved_schema) if schema
           c.with_temperature(temperature) if temperature
+          c.with_max_output_tokens(max_output_tokens) if max_output_tokens
+          c.with_thinking(thinking) unless thinking.nil?
+          c.with_citations(citations) unless citations.nil?
+          c.with_caching(caching) unless caching.nil?
+          c.with_compaction(compaction) unless compaction.nil?
+          c.with_fallbacks(*fallbacks, **{ on: fallback_on }.compact) if fallbacks
+          c.with_end_user(end_user) if end_user
+          c.with_provider_options(provider_options) if provider_options
+          c.with_headers(headers) if headers
           c.with_tools(*resolved_tools) if resolved_tools.any?
           c.with_provider_tools(**provider_tools) if provider_tools
           c.with_tool_options(**tool_options) if tool_options
         end
+      end
+
+      # Runs before with_instructions, since Chat#messages= replaces the whole conversation -- the
+      # system prompt included -- and with_instructions then replaces any system message the history
+      # carried. The seeded count lets `transcript` skip what the caller already had.
+      def seed_history(chat)
+        chat.messages = history
+        @seeded_message_count = chat.messages.count { |m| m.role != :system }
       end
 
       # chat.messages already retains the whole exchange (RubyLLM's own Chat#tokens / Chat#cost read
@@ -216,7 +284,7 @@ module Axn
       # excluded: it's an Ask input the caller already has (system_prompt), not something the loop
       # produced.
       def transcript_entries
-        chat.messages.reject { |m| m.role == :system }.map do |m|
+        chat.messages.reject { |m| m.role == :system }.drop(@seeded_message_count || 0).map do |m|
           {
             role: m.role,
             content: m.content.is_a?(String) ? m.content : nil,
@@ -307,8 +375,14 @@ module Axn
       # straight in) and already-wrapped `::RubyLLM::Tool`s -- a class or an instance, the latter being
       # how you pass a tool that closed over explicit context via `Axn::RubyLLM.wrap(axn, ambient_context:)`.
       # RubyLLM's `with_tools` accepts either a class or an instance, so wrapped classes register as-is.
-      def resolved_tools
-        Array(tools).map { |tool| _as_ruby_llm_tool(tool) }
+      #
+      # Memoized: with max_tool_calls, every guarded tool must share the ONE budget built here.
+      memo def resolved_tools
+        wrapped = Array(tools).map { |tool| _as_ruby_llm_tool(tool) }
+        return wrapped unless max_tool_calls
+
+        budget = ToolBudget.new(max_tool_calls)
+        wrapped.map { |tool| budget.guard(tool) }
       end
 
       def _as_ruby_llm_tool(tool)

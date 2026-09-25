@@ -32,7 +32,7 @@ RSpec.describe Axn::RubyLLM::Ask do
     allow(chat_instance).to receive(:with_temperature).and_return(chat_instance)
     allow(chat_instance).to receive(:with_provider_options).and_return(chat_instance)
     allow(chat_instance).to receive(:with_tools).and_return(chat_instance)
-    allow(chat_instance).to receive(:ask).with(prompt).and_return(llm_response)
+    allow(chat_instance).to receive(:ask).with(prompt, with: nil).and_return(llm_response)
     allow(chat_instance).to receive(:tokens).and_return(llm_tokens)
     allow(chat_instance).to receive(:cost).and_return(llm_cost)
     allow(chat_instance).to receive(:messages).and_return([])
@@ -570,6 +570,163 @@ RSpec.describe Axn::RubyLLM::Ask do
     end
   end
 
+  describe "model resolution pass-through" do
+    it "forwards provider:/protocol:/assume_model_exists:/context: to RubyLLM.chat" do
+      context = instance_double(RubyLLM::Context)
+      expect(RubyLLM).to receive(:chat)
+        .with(model: "my-model", provider: :openai, protocol: :chat_completions, assume_model_exists: true, context:)
+        .and_return(chat_instance)
+      described_class.call(prompt:, model: "my-model", provider: :openai, protocol: :chat_completions,
+                           assume_model_exists: true, context:)
+    end
+  end
+
+  describe "Chat#with_* pass-through" do
+    {
+      max_output_tokens: [:with_max_output_tokens, 500, [500]],
+      end_user: [:with_end_user, "user-hash-123", ["user-hash-123"]],
+      provider_options: [:with_provider_options, { service_tier: "flex" }, [{ service_tier: "flex" }]],
+      headers: [:with_headers, { "anthropic-beta" => "x" }, [{ "anthropic-beta" => "x" }]],
+      thinking: [:with_thinking, { effort: :high }, [{ effort: :high }]],
+      citations: [:with_citations, true, [true]],
+      caching: [:with_caching, { ttl: "1h" }, [{ ttl: "1h" }]],
+      compaction: [:with_compaction, { at: 50_000 }, [{ at: 50_000 }]],
+    }.each do |input, (method, value, args)|
+      it "forwards #{input}: to #{method}" do
+        expect(chat_instance).to receive(method).with(*args).and_return(chat_instance)
+        described_class.call(prompt:, input => value)
+      end
+
+      it "does not call #{method} when #{input}: is omitted" do
+        allow(chat_instance).to receive(method)
+        described_class.call(prompt:)
+        expect(chat_instance).not_to have_received(method)
+      end
+    end
+
+    %i[thinking citations caching compaction].each do |input|
+      it "forwards an explicit #{input}: false (a real instruction, not an omission)" do
+        expect(chat_instance).to receive(:"with_#{input}").with(false).and_return(chat_instance)
+        described_class.call(prompt:, input => false)
+      end
+    end
+
+    it "forwards fallbacks: to with_fallbacks, with fallback_on: as on:" do
+      expect(chat_instance).to receive(:with_fallbacks).with("claude-haiku-4-5", "gpt-4.1-mini", on: [RubyLLM::ServerError])
+                                                       .and_return(chat_instance)
+      described_class.call(prompt:, fallbacks: %w[claude-haiku-4-5 gpt-4.1-mini], fallback_on: [RubyLLM::ServerError])
+    end
+
+    it "leaves with_fallbacks' default error classes alone when fallback_on: is omitted" do
+      expect(chat_instance).to receive(:with_fallbacks).with("claude-haiku-4-5").and_return(chat_instance)
+      described_class.call(prompt:, fallbacks: ["claude-haiku-4-5"])
+    end
+  end
+
+  describe "attachments:" do
+    it "passes attachments to Chat#ask as with:" do
+      expect(chat_instance).to receive(:ask).with(prompt, with: ["report.pdf"]).and_return(llm_response)
+      described_class.call(prompt:, attachments: ["report.pdf"])
+    end
+  end
+
+  describe "history:" do
+    let(:history) { [{ role: :user, content: "Earlier question" }, { role: :assistant, content: "Earlier answer" }] }
+    let(:seeded) do
+      history.map { |h| instance_double(RubyLLM::Message, role: h[:role], content: h[:content], tool_calls: nil, tool_call_id: nil, server_tool_calls: nil) }
+    end
+    let(:new_user_message) do
+      instance_double(RubyLLM::Message, role: :user, content: prompt, tool_calls: nil, tool_call_id: nil, server_tool_calls: nil)
+    end
+
+    before do
+      allow(llm_response).to receive_messages(role: :assistant, tool_calls: nil, tool_call_id: nil, server_tool_calls: nil)
+      allow(chat_instance).to receive(:messages=)
+    end
+
+    it "seeds the chat's messages before setting the system prompt (which messages= would otherwise wipe)" do
+      allow(chat_instance).to receive(:messages).and_return(seeded)
+      expect(chat_instance).to receive(:messages=).with(history).ordered
+      expect(chat_instance).to receive(:with_instructions).with("Be terse.").ordered.and_return(chat_instance)
+      described_class.call(prompt:, history:, system_prompt: "Be terse.")
+    end
+
+    it "leaves the seeded turns out of transcript" do
+      allow(chat_instance).to receive(:messages).and_return(seeded, [*seeded, new_user_message, llm_response])
+      result = described_class.call(prompt:, history:)
+      expect(result.transcript.map { |m| m[:content] }).to eq([prompt, "Here is the summary."])
+    end
+  end
+
+  describe "on_chunk:" do
+    it "passes the callable to Chat#ask as its streaming block" do
+      chunks = []
+      on_chunk = ->(chunk) { chunks << chunk }
+      allow(chat_instance).to receive(:ask).with(prompt, with: nil) do |*_args, &block|
+        block.call(:chunk1)
+        block.call(:chunk2)
+        llm_response
+      end
+
+      result = described_class.call(prompt:, on_chunk:)
+
+      expect(chunks).to eq(%i[chunk1 chunk2])
+      expect(result.response).to eq("Here is the summary.")
+    end
+  end
+
+  describe "max_tool_calls:" do
+    let(:tool_class) do
+      Class.new(RubyLLM::Tool) do
+        def self.name = "EchoTool"
+        def execute = "ran"
+      end
+    end
+
+    let(:other_tool_class) do
+      Class.new(RubyLLM::Tool) do
+        def self.name = "OtherTool"
+        def execute = "ran other"
+      end
+    end
+
+    def registered_tools(tools: [tool_class], **params)
+      registered = nil
+      allow(chat_instance).to receive(:with_tools) do |*registered_now|
+        registered = registered_now
+        chat_instance
+      end
+      described_class.call(prompt:, tools:, **params)
+      registered
+    end
+
+    it "caps the total tool calls, then answers each further call with a budget-exhausted error" do
+      tool = registered_tools(max_tool_calls: 2).first
+
+      expect([tool.call, tool.call]).to eq(%w[ran ran])
+      expect(tool.call[:error]).to start_with("Tool call budget exhausted (2 tool calls for this request)")
+    end
+
+    it "shares one budget across every tool" do
+      first, second = registered_tools(tools: [tool_class, other_tool_class], max_tool_calls: 1)
+
+      expect(first.call).to eq("ran")
+      expect(second.call[:error]).to include("budget exhausted")
+    end
+
+    it "does not mutate a caller-supplied tool instance" do
+      instance = tool_class.new
+      allow(chat_instance).to receive(:with_tools).and_return(chat_instance)
+      described_class.call(prompt:, tools: [instance], max_tool_calls: 1)
+
+      3.times { expect(instance.call).to eq("ran") }
+    end
+
+    it "registers tools unguarded when max_tool_calls: is omitted" do
+      expect(registered_tools).to eq([tool_class])
+    end
+  end
+
   describe "transcript" do
     let(:tool_call) { instance_double(RubyLLM::ToolCall, name: "execute_sql", arguments: { "sql" => "select 1" }, remote?: false) }
     let(:assistant_message) do
@@ -683,7 +840,7 @@ RSpec.describe Axn::RubyLLM::Ask do
       # RubyLLM's own Chat#tokens / Chat#cost aggregate every provider attempt across the whole
       # tool loop -- not just the final turn -- so Ask reads the chat-wide ledger, not
       # chat.messages. The stubbed ledger here already reflects that whole-loop total.
-      allow(chat_instance).to receive(:ask).with(prompt).and_return(final_turn)
+      allow(chat_instance).to receive(:ask).with(prompt, with: nil).and_return(final_turn)
     end
 
     it "sums token usage and cost across every turn, not just the final one" do

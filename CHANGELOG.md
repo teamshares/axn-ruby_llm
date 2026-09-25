@@ -2,8 +2,8 @@
 
 ## [Unreleased]
 
-Built for the Vanguard Probe spike (os-app); not released as a gem version yet — see the PR
-description for the full pass-through ticket this branch starts.
+Grew out of the Vanguard Probe spike (os-app); rounded out by PRO-3518 so the pass-through
+surface ships as one release. Not released as a gem version yet.
 
 ### Added
 
@@ -28,6 +28,38 @@ description for the full pass-through ticket this branch starts.
   excluded), shaped as `{ role:, content:, tool_calls:, tool_call_id:, server_tool_calls: }`. This
   is the only place to see what a provider-hosted remote tool actually did, since that call never
   reaches this app directly.
+- **`Ask` now covers the rest of `RubyLLM::Chat`'s `with_*` surface** (PRO-3518). Each input is
+  forwarded only when given:
+  - `provider:`, `protocol:`, `assume_model_exists:`, `context:` → `RubyLLM.chat(...)`, alongside `model:`
+  - `fallbacks:` / `fallback_on:` → `with_fallbacks(*fallbacks, on:)`
+  - `max_output_tokens:` → `with_max_output_tokens`
+  - `thinking:` → `with_thinking`
+  - `citations:` → `with_citations`
+  - `caching:` → `with_caching`
+  - `compaction:` → `with_compaction`
+  - `end_user:` → `with_end_user`
+  - `provider_options:` → `with_provider_options`
+  - `headers:` → `with_headers`
+
+  `thinking:`, `citations:`, `caching:`, and `compaction:` forward an explicit `false` as well.
+- **`Ask` accepts `attachments:`**, which is passed to `Chat#ask` as `with:` (files, paths, or URLs).
+- **`Ask` accepts `history:`**, prior turns seeded through `Chat#messages=` before the prompt.
+  `transcript` leaves them out.
+- **`Ask` accepts `on_chunk:`**, a callable given each streamed `RubyLLM::Chunk`. `response` is still
+  the complete message, so `schema:` is unaffected.
+- **`Ask` accepts `max_tool_calls:`**, a soft cap on app-executed tool calls per `ask`, shared
+  across every tool. Past the cap, each call returns an error result telling the model to wrap up.
+- **`remote_mcp_tools` accepts `bearer_token:`** (a String, or a callable run on every request so
+  the caller can rotate it) **and `oauth:`** (an `mcp`-gem `OAuth::Provider` /
+  `ClientCredentialsProvider`, passed through to `MCP::Client::HTTP`). Both require an https or
+  loopback URL.
+
+### Changed
+
+- `Ask`'s `provider_tools:` input is now `sensitive: true`, since its `headers:` usually carry an
+  API key. axn no longer writes it to logs.
+- `RemoteMcp::Budget` is now `Axn::RubyLLM::ToolBudget`, shared by `remote_mcp_tools(max_calls:)`
+  and `max_tool_calls:`. It was never released.
 
 ## [0.3.0] - 2026-09-22
 

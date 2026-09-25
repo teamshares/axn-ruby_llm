@@ -4,6 +4,7 @@ require "ruby_llm"
 require "axn"
 
 require_relative "ruby_llm/version"
+require_relative "ruby_llm/tool_budget"
 require_relative "ruby_llm/ask"
 require_relative "ruby_llm/remote_mcp"
 

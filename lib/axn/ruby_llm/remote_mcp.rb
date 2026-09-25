@@ -17,33 +17,6 @@ module Axn
       DEFAULT_TIMEOUT = 60
       DEFAULT_MAX_RESULT_CHARS = 20_000
 
-      # The budget is shared across every tool the toolset wraps -- one counter per `connect`, not
-      # per tool -- because the limit exists to bound how many round-trips ONE chat makes to the
-      # remote server in total, not how many times any single tool gets called. A Mutex (not
-      # Concurrent::AtomicFixnum) is enough for the sequential tool-call path this ships with; see
-      # the axn-ruby_llm pass-through ticket for a lock-free version once concurrent remote calls land.
-      class Budget
-        attr_reader :max_calls
-
-        def initialize(max_calls)
-          @max_calls = max_calls
-          @count = 0
-          @mutex = Mutex.new
-        end
-
-        # Returns true (and reserves a slot) when a call is still allowed, false once max_calls has
-        # been reached. Never raises -- an exhausted budget is a normal, expected end state for a
-        # long research loop, not a bug.
-        def consume!
-          @mutex.synchronize do
-            return false if @count >= @max_calls
-
-            @count += 1
-            true
-          end
-        end
-      end
-
       # Holds the connected client alongside the wrapped tools so the caller can `close` it when
       # done (an MCP::Client::HTTP session is a real HTTP connection, possibly with a live SSE
       # listener thread -- see MCP::Client::HTTP#close). `tools` is what actually gets passed to
@@ -73,13 +46,29 @@ module Axn
         # business being reachable from an LLM's own tool choices; nil (the default) keeps
         # everything the server advertises, so an omitted allowlist is a deliberate "trust every
         # tool this server exposes," not a safe default.
-        def remote_mcp_tools(url:, headers: {}, allowed_tools: nil, max_calls: DEFAULT_MAX_CALLS,
-                             timeout: DEFAULT_TIMEOUT, max_result_chars: DEFAULT_MAX_RESULT_CHARS)
-          client = connect_client(url:, headers:, timeout:)
+        #
+        # Auth beyond a static `headers:` value:
+        #
+        # - `bearer_token:` -- a String, or a callable returning one, sent as `Authorization: Bearer
+        #   <token>`. A callable runs on EVERY request (Faraday's :authorization middleware), so the
+        #   caller owns caching/refresh/rotation (e.g. a token fetched from its own OAuth store).
+        # - `oauth:` -- an `MCP::Client::OAuth::ClientCredentialsProvider` (machine-to-machine) or
+        #   `MCP::Client::OAuth::Provider` (interactive authorization code + PKCE), passed straight to
+        #   `MCP::Client::HTTP`, which runs discovery, token exchange, refresh, and the 401 retry itself.
+        #
+        # Either one refuses a URL that is neither https nor loopback http, so a token never crosses
+        # the wire in plaintext.
+        def remote_mcp_tools(url:, headers: {}, bearer_token: nil, oauth: nil, allowed_tools: nil,
+                             max_calls: DEFAULT_MAX_CALLS, timeout: DEFAULT_TIMEOUT, max_result_chars: DEFAULT_MAX_RESULT_CHARS)
+          raise ArgumentError, "pass bearer_token: or oauth:, not both" if bearer_token && oauth
+
+          client = connect_client(url:, headers:, bearer_token:, oauth:, timeout:)
           remote_tools = client.tools
           remote_tools = remote_tools.select { |t| allowed_tools.include?(t.name) } if allowed_tools
 
-          budget = Budget.new(max_calls)
+          # One budget per toolset, not per tool: the limit bounds how many round-trips ONE chat makes
+          # to this server in total, not how many times any single tool gets called.
+          budget = ToolBudget.new(max_calls, noun: "remote calls")
           wrapped = remote_tools.map { |remote_tool| build_tool_class(remote_tool, client:, budget:, max_result_chars:) }
 
           Toolset.new(tools: wrapped, client:)
@@ -87,10 +76,15 @@ module Axn
 
         private
 
-        def connect_client(url:, headers:, timeout:)
-          transport = ::MCP::Client::HTTP.new(url:, headers:) do |faraday|
+        def connect_client(url:, headers:, bearer_token:, oauth:, timeout:)
+          # MCP::Client::HTTP enforces this itself for oauth:, but knows nothing about a token set by
+          # the Faraday middleware below.
+          raise ArgumentError, "bearer_token: requires an https (or loopback http) MCP URL" if bearer_token && !::MCP::Client::OAuth::Discovery.secure_url?(url)
+
+          transport = ::MCP::Client::HTTP.new(url:, headers:, **{ oauth: }.compact) do |faraday|
             faraday.options.timeout = timeout
             faraday.options.open_timeout = timeout
+            faraday.request :authorization, "Bearer", bearer_token if bearer_token
           end
           ::MCP::Client.new(transport:).tap(&:connect)
         end
@@ -117,10 +111,7 @@ module Axn
         # exercised -- are easy to find and extend on their own, not buried inside class-building
         # metaprogramming.
         def call_remote_tool(client:, tool_name:, args:, budget:, max_result_chars:)
-          unless budget.consume!
-            return { error: "Tool call budget exhausted (#{budget.max_calls} remote calls for this request) -- " \
-                            "write your final answer with what you have so far." }
-          end
+          return budget.exhausted_result unless budget.consume!
 
           response = client.call_tool(name: tool_name, arguments: args)
           render_tool_result(response, max_result_chars:)

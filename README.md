@@ -63,6 +63,41 @@ result = Axn::RubyLLM.ask(
 )
 ```
 
+### Chat options
+
+Every other `RubyLLM::Chat#with_*` setting has a matching `ask` input. Each is forwarded only when given, so omitting it leaves RubyLLM's default in place:
+
+| `ask` input | Forwarded to | Notes |
+|---|---|---|
+| `provider:`, `protocol:`, `assume_model_exists:` | `RubyLLM.chat` (alongside `model:`) | Choose the provider or wire protocol yourself instead of relying on autodetection. `assume_model_exists: true` skips the registry lookup and requires `provider:`. |
+| `context:` | `RubyLLM.chat(context:)` | A `RubyLLM.context { \|c\| ... }` whose API keys and base URLs replace the global config for this call. |
+| `fallbacks:`, `fallback_on:` | `with_fallbacks(*fallbacks, on: fallback_on)` | Models to try in order when generation fails. `fallback_on:` defaults to RubyLLM's transient provider and network errors. |
+| `max_output_tokens:` | `with_max_output_tokens` | |
+| `thinking:` | `with_thinking` | `true`, `false`, or `{ effort:, budget:, display: }`. |
+| `citations:` | `with_citations` | Use with `attachments:` to get `raw_message.citations` back. |
+| `caching:` | `with_caching` | `true`, `false`, or `{ ttl:, id: }`. |
+| `compaction:` | `with_compaction` | `true`, `false`, or `{ at:, instructions:, pause_after: }`. |
+| `end_user:` | `with_end_user` | An opaque id. RubyLLM sends it as given, so never pass PII. |
+| `provider_options:` | `with_provider_options` | Raw keys merged into the request payload, e.g. `{ service_tier: "flex" }`. |
+| `headers:` | `with_headers` | Extra HTTP headers, e.g. a provider beta flag. |
+
+`thinking:`, `citations:`, `caching:`, and `compaction:` also forward an explicit `false`, which you'd use, for example, to turn off thinking on a model that enables it by default. `context:`, `headers:`, and `provider_tools:` are marked `sensitive`, so axn keeps them out of logs.
+
+### Attachments, history, and streaming
+
+```ruby
+Axn::RubyLLM.ask(
+  prompt: "What changed since last quarter?",
+  attachments: ["q3.pdf", "https://example.com/q2.pdf"],  # Chat#ask's with:
+  history: prior_turns,                                  # seeded before the prompt
+  on_chunk: ->(chunk) { print chunk.content },           # streamed as it arrives
+)
+```
+
+- **`attachments:`** is passed to `Chat#ask` as `with:`. RubyLLM reads a String from disk or fetches it over HTTP, so never pass an unvalidated, user-supplied path or URL.
+- **`history:`** is anything `Chat#messages=` accepts: `RubyLLM::Message`s, `{ role:, content: }` Hashes, or records that respond to `#to_llm`. `system_prompt:` replaces any system message in it. `transcript` includes only the turns this call exchanged, not the seeded ones.
+- **`on_chunk:`** receives each `RubyLLM::Chunk`. `response` and `raw_message` are still the complete message, so `schema:` works as usual. The stubbed (disabled) path never calls it.
+
 
 ### Structured output via schema
 
@@ -234,7 +269,7 @@ Passing `ambient_context:` returns a tool **instance** (closing over that contex
 
 ### Using wrapped tools with RubyLLM directly
 
-`Axn::RubyLLM.ask(tools:)` covers the common single-call case. When you're driving `RubyLLM.chat` yourself — multi-turn conversations, streaming, or anything else beyond `ask` — register wrapped tools with RubyLLM's own `with_tools`, which accepts one or many `RubyLLM::Tool` classes/instances:
+`Axn::RubyLLM.ask` runs one prompt through to a final answer. Drive `RubyLLM.chat` yourself when you need more control than that: keeping one chat alive across turns, stepping the loop by hand (`ask_later`/`step`), or RubyLLM's lifecycle callbacks (`before_tool_call`, `after_tool_result`, `after_message`, `before_request`, `before_fallback`). Register wrapped tools with RubyLLM's own `with_tools`, which accepts one or many `RubyLLM::Tool` classes/instances:
 
 ```ruby
 chat = RubyLLM.chat.with_tools(Axn::RubyLLM.wrap(CreateWidget))
@@ -264,6 +299,28 @@ Axn::RubyLLM.ask(
 
 See RubyLLM's `Chat#with_provider_tools` for the other aliases (`:web_search`, `:code_execution`, ...) and which providers support each one.
 
+### App-side remote MCP (`Axn::RubyLLM.remote_mcp_tools`)
+
+`remote_mcp_tools` works the other way round: *your app* connects to the MCP server, using the official `mcp` gem, and wraps each of the server's tools as an ordinary `RubyLLM::Tool`. They sit next to your Axn tools in `tools:`, and every call is one your app makes, logs, times out, and can cap.
+
+```ruby
+toolset = Axn::RubyLLM.remote_mcp_tools(
+  url: ENV.fetch("METABASE_MCP_URL"),
+  headers: { "X-API-KEY" => ENV.fetch("METABASE_MCP_API_KEY") },
+  allowed_tools: %w[search execute_sql],  # pass it: a server's full list can include write/admin tools
+  max_calls: 20,                          # shared across the whole toolset (default 20)
+)
+Axn::RubyLLM.ask(prompt: "...", tools: [*Axn::RubyLLM.tools, *toolset.tools])
+toolset.close
+```
+
+`timeout:` (default 60s) and `max_result_chars:` (default 20,000) bound each call. When a server wants more than a static header for auth:
+
+- **`bearer_token:`** takes a String, or a callable that returns one, and sends it as `Authorization: Bearer <token>`. A callable runs on **every request**, so your code owns fetching, caching, and rotating the token, e.g. `bearer_token: -> { MyOAuthStore.current_token }`.
+- **`oauth:`** takes an `MCP::Client::OAuth::ClientCredentialsProvider` (machine-to-machine) or `MCP::Client::OAuth::Provider` (interactive authorization code + PKCE). It's passed straight to `MCP::Client::HTTP`, which handles discovery, token exchange, refresh, and retrying after a 401.
+
+Pass one or the other, not both. Both refuse a URL that is neither https nor loopback http.
+
 ### Pausing on approval before a provider-hosted call runs (`on_remote_tool_approval:`)
 
 Set `require_approval: "always"` (or per-tool) on a `provider_tools:` entry and the provider pauses before running the call, asking your app to approve or deny it first. Without a decision, `ask` would return whatever the chat produced at that pause — not a final answer. Pass `on_remote_tool_approval:`, a callable given each pending `RubyLLM::ToolCall` (`.name`, `.arguments`, `.remote?`), and `ask` drives the chat past every approval until it's genuinely done:
@@ -287,6 +344,14 @@ The same callback also resolves a **local** tool declared with `Tool.requires_ap
 
 ```ruby
 Axn::RubyLLM.ask(prompt: "...", tools: [...], tool_options: { concurrency: :threads, calls: :many })
+```
+
+### Capping tool calls (`max_tool_calls:`)
+
+`ask` has no limit of its own on how long the tool loop runs, because RubyLLM 2.0 removed `halt_after`. `max_tool_calls:` caps how many tool calls your app runs in one `ask`, counted across every tool in `tools:`. Once the cap is reached, each further call returns `{ error: "Tool call budget exhausted ... write your final answer with what you have so far." }` and the model is left to finish. The cap is soft on purpose: raising would throw away everything the chat had gathered. Calls to `remote_mcp_tools` tools count here as well as against their own `max_calls`. Provider-hosted calls (`provider_tools:`) never reach your app, so they aren't counted. The caller's tool instances are copied, not modified, so reusing a `wrap(axn, ambient_context:)` instance across calls is safe.
+
+```ruby
+Axn::RubyLLM.ask(prompt: "...", tools: Axn::RubyLLM.tools, max_tool_calls: 15)
 ```
 
 ### Reading what the chat actually did (`transcript`)

@@ -23,6 +23,55 @@ RSpec.describe Axn::RubyLLM::RemoteMcp do
       described_class.remote_mcp_tools(url: "https://example.com/mcp", headers: { "X-API-KEY" => "secret" })
     end
 
+    describe "auth beyond static headers" do
+      # Runs the Faraday customizer block remote_mcp_tools hands MCP::Client::HTTP against a real
+      # connection, so the assertion is on the Authorization header actually sent.
+      def sent_authorization(**options)
+        customizer = nil
+        allow(MCP::Client::HTTP).to receive(:new) do |**, &block|
+          customizer = block
+          transport
+        end
+        described_class.remote_mcp_tools(url: "https://example.com/mcp", **options)
+
+        seen = []
+        stubs = Faraday::Adapter::Test::Stubs.new
+        stubs.post("/mcp") { |env| [200, {}, seen << env.request_headers["Authorization"]] }
+        connection = Faraday.new(url: "https://example.com") do |f|
+          customizer.call(f)
+          f.adapter :test, stubs
+        end
+        2.times { connection.post("/mcp") }
+        seen
+      end
+
+      it "sends a static bearer_token: String as Authorization: Bearer" do
+        expect(sent_authorization(bearer_token: "abc")).to eq(["Bearer abc", "Bearer abc"])
+      end
+
+      it "calls a bearer_token: callable on every request, so the caller can rotate it" do
+        tokens = %w[first second].each
+        expect(sent_authorization(bearer_token: -> { tokens.next })).to eq(["Bearer first", "Bearer second"])
+      end
+
+      it "refuses a bearer_token: over plain http to a non-loopback host" do
+        expect { described_class.remote_mcp_tools(url: "http://example.com/mcp", bearer_token: "abc") }
+          .to raise_error(ArgumentError, /https/)
+      end
+
+      it "passes oauth: through to MCP::Client::HTTP" do
+        provider = instance_double(MCP::Client::OAuth::ClientCredentialsProvider)
+        expect(MCP::Client::HTTP).to receive(:new).with(url: "https://example.com/mcp", headers: {}, oauth: provider).and_return(transport)
+        described_class.remote_mcp_tools(url: "https://example.com/mcp", oauth: provider)
+      end
+
+      it "rejects bearer_token: and oauth: together" do
+        provider = instance_double(MCP::Client::OAuth::ClientCredentialsProvider)
+        expect { described_class.remote_mcp_tools(url: "https://example.com/mcp", bearer_token: "abc", oauth: provider) }
+          .to raise_error(ArgumentError, "pass bearer_token: or oauth:, not both")
+      end
+    end
+
     it "connects the client" do
       expect(client).to receive(:connect)
       described_class.remote_mcp_tools(url: "https://example.com/mcp")
