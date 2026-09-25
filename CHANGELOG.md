@@ -58,6 +58,17 @@ surface ships as one release. Not released as a gem version yet.
 
 ### Changed
 
+- **The OpenTelemetry attribute `gen_ai.usage.input_tokens` now reports all input tokens, cached
+  included** (the OTel GenAI definition). It used to report uncached input only, which under-counts
+  badly under prompt caching (e.g. 9 instead of ~58k on a `gpt-5.6` tool loop). New span attributes:
+  `gen_ai.usage.cache_read.input_tokens`, `gen_ai.usage.cache_creation.input_tokens`, and
+  `axn.ruby_llm.version` (to separate spans from before and after this change). Dashboards summing
+  `gen_ai.usage.input_tokens` will step up when a service upgrades.
+- **New `Ask` exposures `total_input_tokens` and `uncached_input_tokens`.** `input_tokens` (same
+  value as `uncached_input_tokens`) and `prompt_tokens` (same as `total_input_tokens`) are
+  deprecated, with no change to their values. The bare `input_tokens` name meant uncached input in
+  RubyLLM's convention but all input in OpenTelemetry's, so it's retired rather than redefined.
+
 - `Ask`'s `provider_tools:` input is now `sensitive: true`, since its `headers:` usually carry an
   API key. axn no longer writes it to logs.
 - `RemoteMcp::Budget` is now `Axn::RubyLLM::ToolBudget`, shared by `remote_mcp_tools(max_calls:)`
