@@ -66,8 +66,9 @@ module Axn
           remote_tools = client.tools
           remote_tools = remote_tools.select { |t| allowed_tools.include?(t.name) } if allowed_tools
 
-          # One budget per toolset, not per tool: the limit bounds how many round-trips ONE chat makes
-          # to this server in total, not how many times any single tool gets called.
+          # One budget per toolset, not per tool: the limit bounds total round-trips to this server, not
+          # calls to any single tool. It lives as long as the toolset and never resets, so connect a
+          # toolset per request (as the example above does) for a per-request cap.
           budget = ToolBudget.new(max_calls, noun: "remote calls")
           wrapped = remote_tools.map { |remote_tool| build_tool_class(remote_tool, client:, budget:, max_result_chars:) }
 

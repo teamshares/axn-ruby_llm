@@ -33,7 +33,7 @@ module Axn
       end
 
       def exhausted_result
-        { error: "Tool call budget exhausted (#{@max_calls} #{@noun} for this request) -- " \
+        { error: "Tool call budget exhausted (#{@max_calls} #{@noun} allowed) -- " \
                  "write your final answer with what you have so far." }
       end
 

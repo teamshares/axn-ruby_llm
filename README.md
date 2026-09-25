@@ -313,13 +313,13 @@ toolset = Axn::RubyLLM.remote_mcp_tools(
   url: ENV.fetch("METABASE_MCP_URL"),
   headers: { "X-API-KEY" => ENV.fetch("METABASE_MCP_API_KEY") },
   allowed_tools: %w[search execute_sql],  # pass it: a server's full list can include write/admin tools
-  max_calls: 20,                          # shared across the whole toolset (default 20)
+  max_calls: 20,                          # shared across the whole toolset, for its lifetime (default 20)
 )
 Axn::RubyLLM.ask(prompt: "...", tools: [*Axn::RubyLLM.tools, *toolset.tools])
 toolset.close
 ```
 
-`timeout:` (default 60s) and `max_result_chars:` (default 20,000) bound each call. When a server wants more than a static header for auth:
+The `max_calls` budget never resets, so connect a fresh toolset per request (and `close` it) when you want a per-request cap; a toolset reused across requests shares one budget between them. `timeout:` (default 60s) and `max_result_chars:` (default 20,000) bound each call. When a server wants more than a static header for auth:
 
 - **`bearer_token:`** takes a String, or a callable that returns one, and sends it as `Authorization: Bearer <token>`. A callable runs on **every request**, so your code owns fetching, caching, and rotating the token, e.g. `bearer_token: -> { MyOAuthStore.current_token }`.
 - **`oauth:`** takes an `MCP::Client::OAuth::ClientCredentialsProvider` (machine-to-machine) or `MCP::Client::OAuth::Provider` (interactive authorization code + PKCE). It's passed straight to `MCP::Client::HTTP`, which handles discovery, token exchange, refresh, and retrying after a 401.

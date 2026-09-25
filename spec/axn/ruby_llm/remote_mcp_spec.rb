@@ -181,7 +181,7 @@ RSpec.describe Axn::RubyLLM::RemoteMcp do
         2.times { tool_instance.execute(sql: "select 1") }
 
         expect(client).not_to receive(:call_tool)
-        expect(tool_instance.execute(sql: "select 1")).to eq({ error: "Tool call budget exhausted (2 remote calls for this request) -- " \
+        expect(tool_instance.execute(sql: "select 1")).to eq({ error: "Tool call budget exhausted (2 remote calls allowed) -- " \
                                                                       "write your final answer with what you have so far." })
       end
 

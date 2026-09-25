@@ -15,7 +15,7 @@ RSpec.describe Axn::RubyLLM::ToolBudget do
 
   it "names the budget's noun in the exhausted result" do
     expect(described_class.new(3, noun: "remote calls").exhausted_result[:error])
-      .to eq("Tool call budget exhausted (3 remote calls for this request) -- write your final answer with what you have so far.")
+      .to eq("Tool call budget exhausted (3 remote calls allowed) -- write your final answer with what you have so far.")
   end
 
   describe "#guard" do

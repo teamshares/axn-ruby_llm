@@ -160,8 +160,11 @@ module Axn
       end
 
       def call
+        # parsed_response runs the chat; usage must be read after it -- token_usage/cost_breakdown
+        # memoize Chat#tokens/#cost, which are an empty ledger until #ask has run.
+        response = parsed_response
         usage = usage_exposures
-        expose(response: parsed_response, raw_message: llm_response, transcript: transcript_entries, **usage)
+        expose(response:, raw_message: llm_response, transcript: transcript_entries, **usage)
         record_otel_attributes!(usage, response_model: llm_response&.model)
       rescue ::RubyLLM::RateLimitError => e
         fail! "Rate limit reached: #{e.message}"

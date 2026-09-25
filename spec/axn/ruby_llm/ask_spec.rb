@@ -385,6 +385,22 @@ RSpec.describe Axn::RubyLLM::Ask do
       expect(result.prompt_tokens).to eq(12) # input only, no cache tokens
     end
 
+    it "reads the usage ledger only after the chat has run (a real Chat's ledger is empty before #ask)" do
+      asked = false
+      allow(chat_instance).to receive(:ask).with(prompt, with: nil) do
+        asked = true
+        llm_response
+      end
+      allow(chat_instance).to receive(:tokens) do
+        asked ? llm_tokens : instance_double(RubyLLM::Tokens, input: nil, output: nil, cache_read: nil, cache_write: nil)
+      end
+      allow(chat_instance).to receive(:cost) { asked ? llm_cost : instance_double(RubyLLM::Cost, total: nil) }
+
+      expect(result.total_input_tokens).to eq(12)
+      expect(result.output_tokens).to eq(34)
+      expect(result.cost).to eq(0.00056)
+    end
+
     it "exposes total cost as a Float via cost" do
       expect(result.cost).to eq(0.00056)
     end
@@ -723,7 +739,7 @@ RSpec.describe Axn::RubyLLM::Ask do
       tool = registered_tools(max_tool_calls: 2).first
 
       expect([tool.call, tool.call]).to eq(%w[ran ran])
-      expect(tool.call[:error]).to start_with("Tool call budget exhausted (2 tool calls for this request)")
+      expect(tool.call[:error]).to start_with("Tool call budget exhausted (2 tool calls allowed)")
     end
 
     it "shares one budget across every tool" do
