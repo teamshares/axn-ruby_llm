@@ -102,7 +102,9 @@ module Axn
         def close_quietly(transport)
           transport.close
         rescue StandardError => e
-          Axn.config.logger.warn { "[axn-ruby_llm] closing remote MCP transport after a failed setup also failed: #{e.class}: #{e.message}" }
+          Axn::Extensions.best_effort("logging a failed remote MCP transport close") do
+            Axn.config.logger.warn { "[axn-ruby_llm] closing remote MCP transport after a failed setup also failed: #{e.class}: #{e.message}" }
+          end
         end
 
         def build_tool_class(remote_tool, client:, budget:, max_result_chars:)
@@ -141,7 +143,10 @@ module Axn
           # RubyLLM has no rescue around a tool's #execute (axn-ruby_llm's own ToolAdapter guard
           # exists for exactly this reason on the Axn side) -- an unanticipated MCP client error
           # here (a malformed response, a client-side bug) must not escape and break the whole chat.
-          Axn.config.logger.error { "[axn-ruby_llm] remote MCP tool #{tool_name.inspect} failed: #{e.class}: #{e.message}" }
+          # best_effort: a broken configured logger must not defeat this boundary either.
+          Axn::Extensions.best_effort("logging a remote MCP tool failure") do
+            Axn.config.logger.error { "[axn-ruby_llm] remote MCP tool #{tool_name.inspect} failed: #{e.class}: #{e.message}" }
+          end
           { error: "The remote tool could not produce a valid response" }
         end
 

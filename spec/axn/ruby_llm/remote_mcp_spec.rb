@@ -83,6 +83,17 @@ RSpec.describe Axn::RubyLLM::RemoteMcp do
       expect(transport).to have_received(:close)
     end
 
+    it "re-raises the original error even if closing the transport and the logger both fail" do
+      allow(client).to receive(:tools).and_raise(MCP::Client::ServerError.new("tools/list failed", code: -32_603))
+      allow(transport).to receive(:close).and_raise(Faraday::ServerError.new("500 on DELETE"))
+      broken_logger = instance_double(Logger)
+      allow(broken_logger).to receive(:warn).and_raise(IOError, "log device closed")
+      allow(broken_logger).to receive(:error)
+      allow(Axn.config).to receive(:logger).and_return(broken_logger)
+      expect { described_class.remote_mcp_tools(url: "https://example.com/mcp") }
+        .to raise_error(MCP::Client::ServerError, "tools/list failed")
+    end
+
     it "re-raises the original error even if closing the transport also fails" do
       allow(client).to receive(:tools).and_raise(MCP::Client::ServerError.new("tools/list failed", code: -32_603))
       allow(transport).to receive(:close).and_raise(Faraday::ServerError.new("500 on DELETE"))
@@ -186,6 +197,14 @@ RSpec.describe Axn::RubyLLM::RemoteMcp do
 
     context "when an unanticipated error occurs (e.g. a client-side bug)" do
       before { allow(client).to receive(:call_tool).and_raise(StandardError.new("undefined method 'foo' for nil")) }
+
+      it "returns the generic error Hash even when the configured logger raises too" do
+        broken_logger = instance_double(Logger)
+        allow(broken_logger).to receive(:error).and_raise(IOError, "log device closed")
+        allow(broken_logger).to receive(:warn)
+        allow(Axn.config).to receive(:logger).and_return(broken_logger)
+        expect(tool.execute(sql: "select 1")).to eq({ error: "The remote tool could not produce a valid response" })
+      end
 
       it "returns a generic error Hash rather than letting the exception escape and break the chat" do
         expect(tool.execute(sql: "select 1")).to eq({ error: "The remote tool could not produce a valid response" })

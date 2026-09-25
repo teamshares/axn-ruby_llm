@@ -67,8 +67,9 @@ RSpec.describe "RubyLLM::Chat parity" do
     }
   end
 
-  # Parameter lists of every method Ask calls with specific arguments. A new keyword here (e.g.
-  # with_instructions gaining an option) is a new capability Ask may want to expose.
+  # Parameter lists of every `covered` method (enforced below). A new keyword here (e.g.
+  # with_instructions gaining an option) is a new capability Ask may want to expose; a changed one
+  # (e.g. approve taking a keyword) breaks a call Ask makes.
   let(:signature_snapshot) do
     {
       initialize: [%i[key model], %i[key provider], %i[key protocol], %i[key assume_model_exists], %i[key context]],
@@ -90,6 +91,12 @@ RSpec.describe "RubyLLM::Chat parity" do
       with_tools: [%i[rest tools]],
       with_provider_tools: [%i[rest tools], %i[keyrest tools_with_options]],
       with_tool_options: [%i[keyrest options]],
+      with_model: [%i[req model_id], %i[key provider], %i[key protocol], %i[key assume_model_exists]],
+      with_context: [%i[req context]],
+      approve: [%i[req tool_call]],
+      deny: [%i[req tool_call]],
+      awaiting_approval?: [],
+      pending_approvals: [],
     }
   end
 
@@ -111,6 +118,10 @@ RSpec.describe "RubyLLM::Chat parity" do
   it "maps every covered method to inputs Ask actually declares" do
     declared = Axn::RubyLLM::Ask.input_schema[:properties].keys
     expect(covered.values.flatten.uniq - declared).to be_empty
+  end
+
+  it "snapshots the signature of every covered method" do
+    expect(covered.keys - signature_snapshot.keys).to be_empty
   end
 
   it "matches the snapshotted signatures of the methods Ask calls" do
