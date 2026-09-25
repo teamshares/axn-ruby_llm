@@ -71,6 +71,10 @@ surface ships as one release. Not released as a gem version yet.
 
 - `Ask`'s `provider_tools:` input is now `sensitive: true`, since its `headers:` usually carry an
   API key. axn no longer writes it to logs.
+- `stub_axn_ruby_llm` now stubs every public `RubyLLM::Chat#with_*` method (derived from the real
+  class, so new ones are picked up automatically), plus `messages=` and `awaiting_approval?`. It also
+  matches `model:` alongside the new model-resolution keywords, so specs that pass any `Ask` option
+  get the canned response instead of an unexpected-message error.
 - `RemoteMcp::Budget` is now `Axn::RubyLLM::ToolBudget`, shared by `remote_mcp_tools(max_calls:)`
   and `max_tool_calls:`. It was never released.
 

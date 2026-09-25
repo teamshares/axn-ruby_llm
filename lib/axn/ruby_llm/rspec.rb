@@ -16,6 +16,7 @@ module Axn
         #   stub_axn_ruby_llm("Here is a summary.")
         #   stub_axn_ruby_llm({ "k" => "v" }, schema: MySchema)  # Hash passed through as `parsed`
         #   stub_axn_ruby_llm("...", input_tokens: 100, output_tokens: 50, cost: 0.0023)
+        #     (input_tokens: here is RubyLLM's uncached Tokens#input -- Ask's uncached_input_tokens)
         #   stub_axn_ruby_llm("...", cache_read_tokens: 500, cache_write_tokens: 200)
         #   stub_axn_ruby_llm(response: "...")               # keyword form still works
         #
@@ -47,14 +48,18 @@ module Axn
                                     cache_read_tokens:, cache_write_tokens:, cost:)
           chat_instance = instance_double(::RubyLLM::Chat)
           if model
-            allow(::RubyLLM).to receive(:chat).with(model:).and_return(chat_instance)
+            # hash_including: Ask also passes provider:/protocol:/assume_model_exists:/context: when set.
+            allow(::RubyLLM).to receive(:chat).with(hash_including(model:)).and_return(chat_instance)
           else
             allow(::RubyLLM).to receive(:chat).and_return(chat_instance)
           end
-          %i[with_instructions with_schema with_temperature with_provider_options with_tools
-             with_provider_tools with_tool_options].each do |method|
+          # Every public with_* on the real Chat, not a hand-kept list -- Ask forwards whichever inputs
+          # the caller set, and the verifying double rejects any method left unstubbed.
+          ::RubyLLM::Chat.public_instance_methods(false).grep(/\Awith_/).each do |method|
             allow(chat_instance).to receive(method).and_return(chat_instance)
           end
+          allow(chat_instance).to receive(:messages=) # history:
+          allow(chat_instance).to receive(:awaiting_approval?).and_return(false) # on_remote_tool_approval:
           allow(chat_instance).to receive(:ask).and_return(llm_message)
           # A stubbed call has no real conversation for transcript_entries to walk -- matches how the
           # disabled/stubbed-config path (Ask#stubbed_exposures) also exposes an empty transcript.
