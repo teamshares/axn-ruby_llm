@@ -81,10 +81,20 @@ module Axn
       # from Chat#messages, which RubyLLM already retains -- this only shapes it for a caller that
       # doesn't want to reach into raw RubyLLM::Message objects.
       exposes :transcript, type: Array, allow_blank: true
-      exposes :input_tokens, allow_nil: true
-      exposes :output_tokens, allow_nil: true
+      # Input token fields deliberately avoid a bare `input_tokens` name: RubyLLM's Tokens#input is a
+      # billing bucket (standard-rate, non-cached input only), while OTel's gen_ai.usage.input_tokens
+      # is the whole prompt including cached tokens. Each name here says which one it is.
+      #
+      # All input tokens: uncached + cache_read + cache_write (the OTel meaning).
+      exposes :total_input_tokens, allow_nil: true
+      # Standard-rate input only -- RubyLLM's Tokens#input.
+      exposes :uncached_input_tokens, allow_nil: true
       exposes :cache_read_tokens, allow_nil: true
       exposes :cache_write_tokens, allow_nil: true
+      exposes :output_tokens, allow_nil: true
+      # Deprecated (see DEPRECATIONS.md): input_tokens == uncached_input_tokens,
+      # prompt_tokens == total_input_tokens.
+      exposes :input_tokens, allow_nil: true
       exposes :prompt_tokens, allow_nil: true
       exposes :cost, allow_nil: true
       exposes :cost_breakdown, allow_nil: true
@@ -143,39 +153,16 @@ module Axn
       before do
         if disabled?
           exposures = stubbed_exposures
-          record_otel_attributes!(
-            input_tokens: exposures[:input_tokens],
-            output_tokens: exposures[:output_tokens],
-            cost: exposures[:cost],
-            response_model: nil,
-            stubbed: true,
-          )
+          record_otel_attributes!(exposures, response_model: nil)
           # Reason attaches to the "LLM request completed" base via the parenthetical join: above.
           done!("using stubbed values - actual LLM request disabled", **exposures)
         end
       end
 
       def call
-        expose(
-          response: parsed_response,
-          raw_message: llm_response,
-          transcript: transcript_entries,
-          input_tokens: token_usage.input,
-          output_tokens: token_usage.output,
-          cache_read_tokens: token_usage.cache_read,
-          cache_write_tokens: token_usage.cache_write,
-          prompt_tokens: total_input_tokens,
-          cost_breakdown:,
-          cost: cost_breakdown&.total,
-          stubbed: false,
-        )
-        record_otel_attributes!(
-          input_tokens: token_usage.input,
-          output_tokens: token_usage.output,
-          cost: cost_breakdown&.total,
-          response_model: llm_response&.model,
-          stubbed: false,
-        )
+        usage = usage_exposures
+        expose(response: parsed_response, raw_message: llm_response, transcript: transcript_entries, **usage)
+        record_otel_attributes!(usage, response_model: llm_response&.model)
       rescue ::RubyLLM::RateLimitError => e
         fail! "Rate limit reached: #{e.message}"
       end
@@ -192,10 +179,12 @@ module Axn
           response: parsed_content || content,
           raw_message: StubMessage.new(content:, tokens: zero_tokens, model: "stubbed"),
           transcript: [],
-          input_tokens: 0,
-          output_tokens: 0,
+          total_input_tokens: 0,
+          uncached_input_tokens: 0,
           cache_read_tokens: 0,
           cache_write_tokens: 0,
+          output_tokens: 0,
+          input_tokens: 0,
           prompt_tokens: 0,
           cost: 0.0,
           cost_breakdown: nil,
@@ -221,6 +210,22 @@ module Axn
       # `ask`; this still reflects the whole call, not just the final response.
       memo def token_usage = chat.tokens
       memo def cost_breakdown = chat.cost
+
+      def usage_exposures
+        total = total_input_tokens
+        {
+          total_input_tokens: total,
+          uncached_input_tokens: token_usage.input,
+          cache_read_tokens: token_usage.cache_read,
+          cache_write_tokens: token_usage.cache_write,
+          output_tokens: token_usage.output,
+          input_tokens: token_usage.input,
+          prompt_tokens: total,
+          cost_breakdown:,
+          cost: cost_breakdown&.total,
+          stubbed: false,
+        }
+      end
 
       # nil only when NO turn reported the field (preserving the "nil if the provider didn't return
       # it" contract); otherwise the summed count, treating a missing component as 0.
@@ -395,14 +400,21 @@ module Axn
         Axn::RubyLLM.wrap(tool)
       end
 
-      def record_otel_attributes!(input_tokens:, output_tokens:, cost:, response_model:, stubbed:)
+      # OTel GenAI semconv: gen_ai.usage.input_tokens "SHOULD include all types of input tokens,
+      # including cached tokens", with the cache counts as sub-totals of it -- so it gets
+      # total_input_tokens, never RubyLLM's uncached Tokens#input. annotate_span skips nil values.
+      # axn.ruby_llm.version separates spans from before/after a change in what an attribute means.
+      def record_otel_attributes!(usage, response_model:)
         Axn::Extensions::Tracing.annotate_span(
           "gen_ai.request.model" => resolved_model,
           "gen_ai.response.model" => response_model,
-          "gen_ai.usage.input_tokens" => input_tokens,
-          "gen_ai.usage.output_tokens" => output_tokens,
-          "gen_ai.usage.cost" => cost,
-          "axn.ruby_llm.stubbed" => stubbed,
+          "gen_ai.usage.input_tokens" => usage[:total_input_tokens],
+          "gen_ai.usage.cache_read.input_tokens" => usage[:cache_read_tokens],
+          "gen_ai.usage.cache_creation.input_tokens" => usage[:cache_write_tokens],
+          "gen_ai.usage.output_tokens" => usage[:output_tokens],
+          "gen_ai.usage.cost" => usage[:cost],
+          "axn.ruby_llm.stubbed" => usage[:stubbed],
+          "axn.ruby_llm.version" => Axn::RubyLLM::VERSION,
         )
       end
     end

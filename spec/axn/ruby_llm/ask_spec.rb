@@ -396,8 +396,17 @@ RSpec.describe Axn::RubyLLM::Ask do
     context "when cache tokens are present" do
       let(:llm_tokens) { instance_double(RubyLLM::Tokens, input: 100, output: 20, cache_read: 30, cache_write: 10) }
 
-      it "includes cache tokens in prompt_tokens" do
-        expect(result.prompt_tokens).to eq(140) # input + cache_read + cache_write
+      it "exposes total_input_tokens as uncached + cache_read + cache_write" do
+        expect(result.total_input_tokens).to eq(140)
+      end
+
+      it "exposes uncached_input_tokens as RubyLLM's standard-rate Tokens#input" do
+        expect(result.uncached_input_tokens).to eq(100)
+      end
+
+      it "keeps the deprecated fields' values: input_tokens is uncached, prompt_tokens is the total" do
+        expect(result.input_tokens).to eq(100)
+        expect(result.prompt_tokens).to eq(140)
       end
     end
 
@@ -405,6 +414,8 @@ RSpec.describe Axn::RubyLLM::Ask do
       let(:llm_tokens) { instance_double(RubyLLM::Tokens, input: nil, output: nil, cache_read: nil, cache_write: nil) }
 
       it "exposes nil token counts and nil prompt_tokens" do
+        expect(result.total_input_tokens).to be_nil
+        expect(result.uncached_input_tokens).to be_nil
         expect(result.input_tokens).to be_nil
         expect(result.output_tokens).to be_nil
         expect(result.prompt_tokens).to be_nil
@@ -473,6 +484,8 @@ RSpec.describe Axn::RubyLLM::Ask do
         expect(result.stubbed).to eq(true)
         expect(result.raw_message.content).to eq("stubbed response value")
         expect(result.raw_message.model).to eq("stubbed")
+        expect(result.total_input_tokens).to eq(0)
+        expect(result.uncached_input_tokens).to eq(0)
         expect(result.input_tokens).to eq(0)
         expect(result.output_tokens).to eq(0)
         expect(result.cache_read_tokens).to eq(0)
@@ -916,6 +929,28 @@ RSpec.describe "Axn::RubyLLM::Ask OTel attribute enrichment" do
     allow(chat_instance).to receive(:cost).and_return(instance_double(RubyLLM::Cost, total: 0.0007))
     Axn::RubyLLM.ask(prompt:)
     expect(axn_span).to have_received(:set_attribute).with("gen_ai.usage.cost", 0.0007)
+  end
+
+  context "when the provider reports cache tokens" do
+    let(:llm_tokens) { instance_double(RubyLLM::Tokens, input: 9, output: 5, cache_read: 40_000, cache_write: 18_000) }
+
+    it "reports gen_ai.usage.input_tokens as the total including cached tokens (OTel semconv), plus the cache sub-totals" do
+      Axn::RubyLLM.ask(prompt:)
+      expect(axn_span).to have_received(:set_attribute).with("gen_ai.usage.input_tokens", 58_009)
+      expect(axn_span).to have_received(:set_attribute).with("gen_ai.usage.cache_read.input_tokens", 40_000)
+      expect(axn_span).to have_received(:set_attribute).with("gen_ai.usage.cache_creation.input_tokens", 18_000)
+    end
+  end
+
+  it "omits the cache attributes when the provider doesn't report them" do
+    Axn::RubyLLM.ask(prompt:)
+    expect(axn_span).not_to have_received(:set_attribute).with("gen_ai.usage.cache_read.input_tokens", anything)
+    expect(axn_span).not_to have_received(:set_attribute).with("gen_ai.usage.cache_creation.input_tokens", anything)
+  end
+
+  it "stamps the gem version, so dashboards can separate spans across a change in attribute meaning" do
+    Axn::RubyLLM.ask(prompt:)
+    expect(axn_span).to have_received(:set_attribute).with("axn.ruby_llm.version", Axn::RubyLLM::VERSION)
   end
 
   context "when disabled (stubbed path)" do

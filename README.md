@@ -161,11 +161,11 @@ Every successful result exposes token usage and cost, read off RubyLLM's own usa
 ```ruby
 result = Axn::RubyLLM.ask(prompt: "...")
 
-result.input_tokens       # => 412  (non-cached input tokens only)
-result.cache_read_tokens  # => 80   (tokens served from cache; nil if provider didn't return them)
-result.cache_write_tokens # => 20   (tokens written to cache; nil if provider didn't return them)
-result.prompt_tokens      # => 512  (input_tokens + cache_read_tokens + cache_write_tokens — total request-side tokens, OpenAI-style)
-result.output_tokens      # => 78
+result.total_input_tokens    # => 512  (every input token: uncached + cache reads + cache writes — use this for prompt size)
+result.uncached_input_tokens # => 412  (standard-rate input only — RubyLLM's Tokens#input)
+result.cache_read_tokens     # => 80   (served from the provider's prompt cache)
+result.cache_write_tokens    # => 20   (written to the provider's prompt cache)
+result.output_tokens         # => 78
 result.cost               # => 0.00056 (Float USD total; nil if RubyLLM has no pricing for the model)
 
 # Full breakdown — RubyLLM::Cost, RubyLLM's own aggregated-cost object
@@ -175,7 +175,11 @@ result.cost_breakdown  # => #<Cost input: 0.0004, output: 0.00016, cache_read: 0
 result.raw_message     # => #<RubyLLM::Message ...>
 ```
 
-`cost` is `nil` when RubyLLM lacks pricing for the model (e.g. unknown/custom endpoints); `cost_breakdown` itself is still a `Cost` object in that case (only its component readers are `nil`). Token counts are nil only if the provider did not return them. `prompt_tokens` is nil only if all three input token fields are nil.
+Use `total_input_tokens` for prompt size. With prompt caching (explicit via `caching:`, or automatic on OpenAI's newer models), a tool loop's repeated prefix is billed as cache reads and new content as cache writes, so `uncached_input_tokens` can be single digits on a 50k-token prompt. `cost` prices each bucket at its own rate, so it's right either way.
+
+There's deliberately no plain `input_tokens` here: RubyLLM's `Tokens#input` means *uncached* input (a billing bucket), while OpenTelemetry's `gen_ai.usage.input_tokens` means *all* input, and each field name says which one it is. The older `input_tokens` (= `uncached_input_tokens`) and `prompt_tokens` (= `total_input_tokens`) still work but are deprecated; see [DEPRECATIONS.md](DEPRECATIONS.md).
+
+`cost` is `nil` when RubyLLM lacks pricing for the model (e.g. unknown/custom endpoints); `cost_breakdown` itself is still a `Cost` object in that case (only its component readers are `nil`). Token counts are nil only if the provider did not return them. `total_input_tokens` is nil only if all three input token fields are nil.
 
 ### Errors
 
@@ -473,10 +477,13 @@ If your app uses OpenTelemetry, `axn` already wraps every action in an `axn.call
 |---|---|
 | `gen_ai.request.model` | The model requested |
 | `gen_ai.response.model` | The model that responded |
-| `gen_ai.usage.input_tokens` | Non-cached input token count |
+| `gen_ai.usage.input_tokens` | `total_input_tokens` — all input, cached included, per the OTel GenAI conventions |
+| `gen_ai.usage.cache_read.input_tokens` | `cache_read_tokens` (omitted when the provider doesn't report it) |
+| `gen_ai.usage.cache_creation.input_tokens` | `cache_write_tokens` (omitted when the provider doesn't report it) |
 | `gen_ai.usage.output_tokens` | Completion token count |
 | `gen_ai.usage.cost` | USD total (non-standard; useful for spend filtering) |
 | `axn.ruby_llm.stubbed` | `true` when production gating returned a stub |
+| `axn.ruby_llm.version` | This gem's version — separates spans from before and after a change in an attribute's meaning |
 | `axn.dimension.invoked_via` | `"ruby_llm"` — set by axn core on every tool call (including nested sub-Axns), not by this gem; lets you separate tool-driven traffic from ordinary direct `.call`s in the same span schema |
 
 For LLM-level tracing (individual `RubyLLM.chat` calls, tool calls, embeddings, prompt content), add [`opentelemetry-instrumentation-ruby_llm`](https://github.com/thoughtbot/opentelemetry-instrumentation-ruby_llm) to your own Gemfile and configure it per its README. It is not a dependency of this gem.
