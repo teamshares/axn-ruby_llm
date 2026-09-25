@@ -42,6 +42,8 @@ surface ships as one release. Not released as a gem version yet.
   - `headers:` → `with_headers`
 
   `thinking:`, `citations:`, `caching:`, and `compaction:` forward an explicit `false` as well.
+- **`Ask` accepts `cache_system_prompt:`**, which marks the system prompt as a prompt-cache boundary
+  (`with_instructions(..., cache_until_here: true)`).
 - **`Ask` accepts `attachments:`**, which is passed to `Chat#ask` as `with:` (files, paths, or URLs).
 - **`Ask` accepts `history:`**, prior turns seeded through `Chat#messages=` before the prompt.
   `transcript` leaves them out.

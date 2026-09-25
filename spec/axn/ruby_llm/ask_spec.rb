@@ -86,6 +86,12 @@ RSpec.describe Axn::RubyLLM::Ask do
       expect(chat_instance).to receive(:with_instructions).with("You are a helpful assistant.").and_return(chat_instance)
       result
     end
+
+    it "marks the system prompt as a cache boundary with cache_system_prompt: true" do
+      expect(chat_instance).to receive(:with_instructions).with("You are a helpful assistant.", cache_until_here: true)
+                                                          .and_return(chat_instance)
+      described_class.call(**params, cache_system_prompt: true)
+    end
   end
 
   context "with a temperature" do

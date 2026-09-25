@@ -72,6 +72,7 @@ Every other `RubyLLM::Chat#with_*` setting has a matching `ask` input. Each is f
 | `provider:`, `protocol:`, `assume_model_exists:` | `RubyLLM.chat` (alongside `model:`) | Choose the provider or wire protocol yourself instead of relying on autodetection. `assume_model_exists: true` skips the registry lookup and requires `provider:`. |
 | `context:` | `RubyLLM.chat(context:)` | A `RubyLLM.context { \|c\| ... }` whose API keys and base URLs replace the global config for this call. |
 | `fallbacks:`, `fallback_on:` | `with_fallbacks(*fallbacks, on: fallback_on)` | Models to try in order when generation fails. `fallback_on:` defaults to RubyLLM's transient provider and network errors. |
+| `cache_system_prompt:` | `with_instructions(system_prompt, cache_until_here: true)` | Marks the system prompt as an explicit prompt-cache boundary. Worth it for a long system prompt you reuse. |
 | `max_output_tokens:` | `with_max_output_tokens` | |
 | `thinking:` | `with_thinking` | `true`, `false`, or `{ effort:, budget:, display: }`. |
 | `citations:` | `with_citations` | Use with `attachments:` to get `raw_message.citations` back. |

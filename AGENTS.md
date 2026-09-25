@@ -36,4 +36,7 @@ runs the full `rake` regardless.
   breaking DSL change, migrate call sites in the same PR; assert `result.error`/`result.success`
   with exact `eq`, not `include`.
 - CHANGELOG every user-visible change under `## [Unreleased]`.
+- `spec/axn/ruby_llm/ruby_llm_parity_spec.rb` fails when a ruby_llm bump adds or re-signatures a public
+  `RubyLLM::Chat` method. Resolve it by forwarding the method from `Ask` or recording why in `skipped`,
+  not by only refreshing the snapshot.
 - `bundle exec rspec && bundle exec rubocop` before done.

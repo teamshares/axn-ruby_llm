@@ -29,6 +29,9 @@ module Axn
       expects :fallbacks, optional: true
       expects :fallback_on, optional: true
       expects :system_prompt, optional: true
+      # true marks the system prompt as an explicit prompt-cache boundary
+      # (with_instructions(cache_until_here: true)) -- worth it for a long, reused system prompt.
+      expects :cache_system_prompt, optional: true
       expects :temperature, optional: true
       expects :max_output_tokens, optional: true
       # true, false (disable for a model that thinks by default), or `{ effort:, budget:, display: }`.
@@ -252,7 +255,7 @@ module Axn
       memo def chat # rubocop:disable Metrics/AbcSize
         ::RubyLLM.chat(model: resolved_model, **{ provider:, protocol:, assume_model_exists:, context: }.compact).tap do |c|
           seed_history(c) if history
-          c.with_instructions(system_prompt) if system_prompt
+          c.with_instructions(system_prompt, **{ cache_until_here: cache_system_prompt }.compact) if system_prompt
           c.with_schema(resolved_schema) if schema
           c.with_temperature(temperature) if temperature
           c.with_max_output_tokens(max_output_tokens) if max_output_tokens
