@@ -166,6 +166,8 @@ result.uncached_input_tokens # => 412  (standard-rate input only — RubyLLM's T
 result.cache_read_tokens     # => 80   (served from the provider's prompt cache)
 result.cache_write_tokens    # => 20   (written to the provider's prompt cache)
 result.output_tokens         # => 78
+result.thinking_tokens       # => 40   (reasoning tokens, where the provider reports them separately)
+result.server_tool_use       # => { "web_search_requests" => 2 }  (per-use counters for provider-hosted tools)
 result.cost               # => 0.00056 (Float USD total; nil if RubyLLM has no pricing for the model)
 
 # Full breakdown — RubyLLM::Cost, RubyLLM's own aggregated-cost object
@@ -184,6 +186,8 @@ There's deliberately no plain `input_tokens` here: RubyLLM's `Tokens#input` mean
 ### Errors
 
 Errors are handled via Axn's declarative `error` DSL. Every failure shares a consistent `"LLM request failed: <reason>"` headline (the headline itself is configurable via `c.error_headline =`, e.g. to `"Something went wrong calling the LLM"`; the reasons below are unaffected):
+- The response hit the output token limit (`finish_reason: :max_tokens`) → `"LLM request failed: Response was cut off by the output token limit before it finished"`. This is checked before `schema:` parsing, so a truncated structured response reports this rather than a JSON error.
+- A provider content filter blocked the response (`finish_reason: :content_filter`) → `"LLM request failed: Response was blocked by the provider's content filter"`
 - `JSON::ParserError` → `"LLM request failed: Response was not valid JSON"`
 - `RubyLLM::RateLimitError` (HTTP 429, provider-agnostic) → `"LLM request failed: Rate limit reached: <message>"`
 - `RubyLLM::OverloadedError` / `ServiceUnavailableError` / `ServerError` (5xx, transient) → `"LLM request failed: Provider temporarily unavailable, try again later: <message>"`
@@ -191,6 +195,8 @@ Errors are handled via Axn's declarative `error` DSL. Every failure shares a con
 - `schema:` set but LLM returned non-JSON, or valid JSON that isn't an object → `"LLM request failed: Response was not valid JSON"` (malformed JSON text) or `"LLM request failed: Schema response was not valid JSON"` (valid JSON, wrong shape)
 - Any other known RubyLLM error — `RubyLLM::Error` (auth, bad request, payment, etc.), `RubyLLM::ConfigurationError`, `ModelNotFoundError`, `ModelRegistryError`, `PromptNotFoundError`, `InvalidRoleError`, `InvalidToolChoiceError`, `PendingToolCallsError`, `CancelledError`, `UnsupportedAttachmentError` — or `Faraday::Error` (network/transport failure) → `"LLM request failed: <message>"`
 - Any other `StandardError` (i.e. not a recognized RubyLLM/network failure — most likely a bug) → `"LLM request failed"`, with no exception detail leaked into the message
+
+The truncation and content-filter failures still expose the usage fields, `cost`, `raw_message`, `transcript` and `finish_reason`, since the call was paid for. `result.finish_reason` is also set on success (normally `:stop`).
 
 ## Tool adapter — wrap any Axn as a RubyLLM::Tool
 

@@ -28,6 +28,11 @@ surface ships as one release. Not released as a gem version yet.
   excluded), shaped as `{ role:, content:, tool_calls:, tool_call_id:, server_tool_calls: }`. This
   is the only place to see what a provider-hosted remote tool actually did, since that call never
   reaches this app directly.
+- **`Ask` exposes `finish_reason`, `thinking_tokens` and `server_tool_use`.** The last two come
+  from RubyLLM's chat-wide usage ledger; `server_tool_use` holds per-use counters for
+  provider-hosted tools (e.g. web searches).
+- **`stub_axn_ruby_llm` accepts `finish_reason:`, `thinking_tokens:` and `server_tool_use:`**, so
+  specs can exercise the truncation/filter failures and the new usage fields.
 - **`remote_mcp_tools` closes its connection when setup fails.** If the handshake, `tools/list`, or
   building the tool classes raises, the transport is closed before the error propagates, so a
   retrying caller no longer leaks HTTP sessions or SSE listener threads.
@@ -60,6 +65,14 @@ surface ships as one release. Not released as a gem version yet.
   loopback URL.
 
 ### Changed
+
+- **`Ask` fails on truncated or filtered responses instead of returning them as a success.** A
+  response cut off by the output token limit (`finish_reason: :max_tokens`) now fails with "Response
+  was cut off by the output token limit before it finished"; one blocked by a provider content
+  filter fails with "Response was blocked by the provider's content filter". Previously both came
+  back as a success (with `schema:`, truncation surfaced as a misleading "Response was not valid
+  JSON"). Usage, `cost`, `raw_message`, `transcript` and `finish_reason` are still exposed on the
+  failure.
 
 - **The OpenTelemetry attribute `gen_ai.usage.input_tokens` now reports all input tokens, cached
   included** (the OTel GenAI definition). It used to report uncached input only, which under-counts

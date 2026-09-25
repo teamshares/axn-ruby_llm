@@ -129,6 +129,55 @@ RSpec.describe "RubyLLM::Chat parity" do
     expect(actual).to eq(signature_snapshot)
   end
 
+  # The usage ledger (Chat#tokens) and final Message are Ask's other RubyLLM surfaces: a new usage
+  # bucket or message field fails here the same way a new Chat method does above.
+  describe "RubyLLM::Tokens and RubyLLM::Message coverage" do
+    let(:tokens_covered) do
+      { input: "uncached_input_tokens / total_input_tokens", output: "output_tokens", cache_read: "cache_read_tokens",
+        cache_write: "cache_write_tokens", thinking: "thinking_tokens", server_tool_use: "server_tool_use" }
+    end
+    let(:tokens_skipped) do
+      { reported_cost: "already reflected in cost (Cost#total prefers the provider-reported cost)",
+        to_h: "serialization", inspect_attributes: "inspect support" }
+    end
+
+    let(:message_covered) do
+      { content: "response", parsed: "response (schema:)", model: "OTel gen_ai.response.model",
+        finish_reason: "finish_reason", max_tokens?: "fails the call", content_filtered?: "fails the call",
+        role: "transcript", tool_calls: "transcript", tool_call_id: "transcript", server_tool_calls: "transcript" }
+    end
+    let(:message_skipped) do
+      via_raw = "reachable as raw_message.<name>; no summary exposure needed"
+      { citations: via_raw, thinking: via_raw, raw: via_raw, raw_content: via_raw, raw_reasoning: via_raw,
+        attachments: via_raw, tokens: "per-message; Ask reports the chat-wide ledger instead",
+        cost: "per-message; Ask reports the chat-wide cost instead", stopped?: "implied by finish_reason",
+        tool_call?: "implied by tool_calls", tool_call_stop?: "implied by finish_reason",
+        tool_result?: "implied by tool_call_id", tool_results: "transcript covers it",
+        conversation: "Rails-integration link", "conversation=": "Rails-integration link",
+        model_info: "registry metadata", "model_info=": "registry metadata",
+        cache_until_here: "request-side cache boundary, not a response field", cache_until_here?: "request-side cache boundary",
+        to_h: "serialization", with_attachments: "builder", without_thinking: "builder" }
+    end
+
+    it "classifies every public RubyLLM::Tokens method" do
+      methods = RubyLLM::Tokens.public_instance_methods(false)
+      expect(methods - tokens_covered.keys - tokens_skipped.keys).to be_empty
+      expect((tokens_covered.keys + tokens_skipped.keys) - methods).to be_empty
+    end
+
+    it "classifies every public RubyLLM::Message method" do
+      methods = RubyLLM::Message.public_instance_methods(false)
+      expect(methods - message_covered.keys - message_skipped.keys).to be_empty
+      expect((message_covered.keys + message_skipped.keys) - methods).to be_empty
+    end
+
+    it "exposes every covered Tokens field on Ask" do
+      exposed = Axn::RubyLLM::Ask.external_field_configs.map(&:field)
+      expected = %i[uncached_input_tokens total_input_tokens output_tokens cache_read_tokens cache_write_tokens thinking_tokens server_tool_use]
+      expect(expected - exposed).to be_empty
+    end
+  end
+
   # Ask forwards these option Hashes verbatim, so a new key already works -- this only flags that the
   # README's list of keys (Chat options table) needs the new one.
   it "matches the snapshotted option keys for thinking: and compaction:" do

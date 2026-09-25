@@ -8,11 +8,12 @@ RSpec.describe Axn::RubyLLM::Ask do
 
   let(:llm_response_content) { "Here is the summary." }
   let(:llm_response_parsed) { nil }
+  let(:llm_finish_reason) { :stop }
   let(:llm_input_tokens) { 12 }
   let(:llm_output_tokens) { 34 }
   let(:llm_model_id) { "gpt-4o-mini" }
   let(:llm_tokens) do
-    instance_double(RubyLLM::Tokens, input: llm_input_tokens, output: llm_output_tokens, cache_read: nil, cache_write: nil)
+    RubyLLM::Tokens.new(input: llm_input_tokens, output: llm_output_tokens, cache_read: nil, cache_write: nil)
   end
   let(:llm_cost) { instance_double(RubyLLM::Cost, total: 0.00056) }
   let(:llm_response) do
@@ -21,6 +22,9 @@ RSpec.describe Axn::RubyLLM::Ask do
       content: llm_response_content,
       parsed: llm_response_parsed,
       model: llm_model_id,
+      finish_reason: llm_finish_reason,
+      max_tokens?: llm_finish_reason == :max_tokens,
+      content_filtered?: llm_finish_reason == :content_filter,
     )
   end
   let(:chat_instance) { instance_double(RubyLLM::Chat) }
@@ -392,7 +396,7 @@ RSpec.describe Axn::RubyLLM::Ask do
         llm_response
       end
       allow(chat_instance).to receive(:tokens) do
-        asked ? llm_tokens : instance_double(RubyLLM::Tokens, input: nil, output: nil, cache_read: nil, cache_write: nil)
+        asked ? llm_tokens : RubyLLM::Tokens.new(input: nil, output: nil, cache_read: nil, cache_write: nil)
       end
       allow(chat_instance).to receive(:cost) { asked ? llm_cost : instance_double(RubyLLM::Cost, total: nil) }
 
@@ -410,7 +414,7 @@ RSpec.describe Axn::RubyLLM::Ask do
     end
 
     context "when cache tokens are present" do
-      let(:llm_tokens) { instance_double(RubyLLM::Tokens, input: 100, output: 20, cache_read: 30, cache_write: 10) }
+      let(:llm_tokens) { RubyLLM::Tokens.new(input: 100, output: 20, cache_read: 30, cache_write: 10) }
 
       it "exposes total_input_tokens as uncached + cache_read + cache_write" do
         expect(result.total_input_tokens).to eq(140)
@@ -427,7 +431,7 @@ RSpec.describe Axn::RubyLLM::Ask do
     end
 
     context "when the provider returns no token data" do
-      let(:llm_tokens) { instance_double(RubyLLM::Tokens, input: nil, output: nil, cache_read: nil, cache_write: nil) }
+      let(:llm_tokens) { RubyLLM::Tokens.new(input: nil, output: nil, cache_read: nil, cache_write: nil) }
 
       it "exposes nil token counts and nil prompt_tokens" do
         expect(result.total_input_tokens).to be_nil
@@ -451,6 +455,76 @@ RSpec.describe Axn::RubyLLM::Ask do
         expect(result.input_tokens).to eq(12)
         expect(result.output_tokens).to eq(34)
         expect(result.prompt_tokens).to eq(12)
+      end
+    end
+  end
+
+  describe "thinking_tokens and server_tool_use" do
+    let(:llm_tokens) do
+      RubyLLM::Tokens.new(input: 10, output: 50, thinking: 30, server_tool_use: { "web_search_requests" => 2 })
+    end
+
+    it "exposes the ledger's thinking tokens and per-use server-tool counters" do
+      expect(result.thinking_tokens).to eq(30)
+      expect(result.server_tool_use).to eq({ "web_search_requests" => 2 })
+    end
+
+    context "when the provider reports neither" do
+      let(:llm_tokens) { RubyLLM::Tokens.new(input: 10, output: 5) }
+
+      it "exposes nil for both" do
+        expect(result.thinking_tokens).to be_nil
+        expect(result.server_tool_use).to be_nil
+      end
+    end
+  end
+
+  describe "finish_reason" do
+    it "exposes the final message's normalized finish_reason" do
+      expect(result.finish_reason).to eq(:stop)
+    end
+
+    context "when the response was cut off by the output token limit" do
+      let(:llm_finish_reason) { :max_tokens }
+
+      it "fails with an explicit reason instead of returning truncated text as a success" do
+        expect(result).not_to be_ok
+        expect(result.error).to eq("LLM request failed: Response was cut off by the output token limit before it finished")
+      end
+
+      it "still exposes usage, cost, raw_message and finish_reason for the call that was paid for" do
+        expect(result.total_input_tokens).to eq(12)
+        expect(result.output_tokens).to eq(34)
+        expect(result.cost).to eq(0.00056)
+        expect(result.raw_message).to eq(llm_response)
+        expect(result.finish_reason).to eq(:max_tokens)
+      end
+
+      context "with a schema" do
+        let(:params) { { prompt:, schema: { type: "object" } } }
+
+        it "reports the truncation rather than a misleading JSON parse error" do
+          expect(result.error).to eq("LLM request failed: Response was cut off by the output token limit before it finished")
+        end
+      end
+    end
+
+    context "when a provider content filter blocked the response" do
+      let(:llm_finish_reason) { :content_filter }
+
+      it "fails with an explicit reason" do
+        expect(result).not_to be_ok
+        expect(result.error).to eq("LLM request failed: Response was blocked by the provider's content filter")
+      end
+    end
+
+    context "when disabled (stubbed path)" do
+      before { Axn::RubyLLM.configure { |c| c.enabled = false } }
+
+      it "exposes a nil finish_reason, nil thinking_tokens and nil server_tool_use" do
+        expect(result.finish_reason).to be_nil
+        expect(result.thinking_tokens).to be_nil
+        expect(result.server_tool_use).to be_nil
       end
     end
   end
@@ -801,7 +875,7 @@ RSpec.describe Axn::RubyLLM::Ask do
 
   describe "on_remote_tool_approval:" do
     let(:pending_call) { instance_double(RubyLLM::ToolCall, name: "execute_sql", arguments: { "sql" => "select 1" }, remote?: true) }
-    let(:resumed_message) { instance_double(RubyLLM::Message, content: "resumed answer", parsed: nil, model: llm_model_id) }
+    let(:resumed_message) { instance_double(RubyLLM::Message, content: "resumed answer", parsed: nil, model: llm_model_id, finish_reason: :stop, max_tokens?: false, content_filtered?: false) }
 
     before do
       allow(chat_instance).to receive(:messages).and_return([])
@@ -867,8 +941,8 @@ RSpec.describe Axn::RubyLLM::Ask do
   end
 
   context "across a tool loop (multiple model round-trips in one ask)" do
-    let(:final_turn) { instance_double(RubyLLM::Message, content: "final answer", parsed: nil, model: llm_model_id) }
-    let(:llm_tokens) { instance_double(RubyLLM::Tokens, input: 150, output: 30, cache_read: nil, cache_write: nil) }
+    let(:final_turn) { instance_double(RubyLLM::Message, content: "final answer", parsed: nil, model: llm_model_id, finish_reason: :stop, max_tokens?: false, content_filtered?: false) }
+    let(:llm_tokens) { RubyLLM::Tokens.new(input: 150, output: 30, cache_read: nil, cache_write: nil) }
     let(:llm_cost) { instance_double(RubyLLM::Cost, total: 0.0045) }
 
     before do
@@ -894,9 +968,9 @@ RSpec.describe "Axn::RubyLLM::Ask OTel attribute enrichment" do
   let(:prompt) { "Summarize this." }
 
   let(:llm_response) do
-    instance_double(RubyLLM::Message, content: "summary", parsed: nil, model: "gpt-4o-mini")
+    instance_double(RubyLLM::Message, content: "summary", parsed: nil, model: "gpt-4o-mini", finish_reason: :stop, max_tokens?: false, content_filtered?: false)
   end
-  let(:llm_tokens) { instance_double(RubyLLM::Tokens, input: 10, output: 5, cache_read: nil, cache_write: nil) }
+  let(:llm_tokens) { RubyLLM::Tokens.new(input: 10, output: 5, cache_read: nil, cache_write: nil) }
   let(:llm_cost) { instance_double(RubyLLM::Cost, total: nil) }
   let(:chat_instance) { instance_double(RubyLLM::Chat) }
 
@@ -948,7 +1022,7 @@ RSpec.describe "Axn::RubyLLM::Ask OTel attribute enrichment" do
   end
 
   context "when the provider reports cache tokens" do
-    let(:llm_tokens) { instance_double(RubyLLM::Tokens, input: 9, output: 5, cache_read: 40_000, cache_write: 18_000) }
+    let(:llm_tokens) { RubyLLM::Tokens.new(input: 9, output: 5, cache_read: 40_000, cache_write: 18_000) }
 
     it "reports gen_ai.usage.input_tokens as the total including cached tokens (OTel semconv), plus the cache sub-totals" do
       Axn::RubyLLM.ask(prompt:)

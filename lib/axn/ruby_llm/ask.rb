@@ -92,11 +92,21 @@ module Axn
       exposes :cache_read_tokens, allow_nil: true
       exposes :cache_write_tokens, allow_nil: true
       exposes :output_tokens, allow_nil: true
+      # Reasoning tokens, where the provider reports them separately (usually also counted in
+      # output_tokens when billed as output).
+      exposes :thinking_tokens, allow_nil: true
+      # Per-use counters for provider-hosted tools, e.g. { "web_search_requests" => 2 } -- billed per
+      # use, not per token.
+      exposes :server_tool_use, allow_nil: true
       # Deprecated (see DEPRECATIONS.md): input_tokens == uncached_input_tokens,
       # prompt_tokens == total_input_tokens.
       exposes :input_tokens, allow_nil: true
       exposes :prompt_tokens, allow_nil: true
       exposes :cost, allow_nil: true
+      # The final message's normalized finish reason (:stop, :tool_calls, :max_tokens,
+      # :content_filter, ...). :max_tokens and :content_filter fail the call -- see
+      # fail_on_incomplete_response! -- with this still exposed.
+      exposes :finish_reason, allow_nil: true
       exposes :cost_breakdown, allow_nil: true
       exposes :stubbed, type: :boolean, default: false
 
@@ -160,12 +170,15 @@ module Axn
       end
 
       def call
-        # parsed_response runs the chat; usage must be read after it -- token_usage/cost_breakdown
+        # llm_response runs the chat; usage must be read after it -- token_usage/cost_breakdown
         # memoize Chat#tokens/#cost, which are an empty ledger until #ask has run.
-        response = parsed_response
+        message = llm_response
         usage = usage_exposures
-        expose(response:, raw_message: llm_response, transcript: transcript_entries, **usage)
-        record_otel_attributes!(usage, response_model: llm_response&.model)
+        record_otel_attributes!(usage, response_model: message&.model)
+        fail_on_incomplete_response!(message, usage)
+
+        expose(response: parsed_response, raw_message: message, transcript: transcript_entries,
+               finish_reason: message&.finish_reason, **usage)
       rescue ::RubyLLM::RateLimitError => e
         fail! "Rate limit reached: #{e.message}"
       end
@@ -189,6 +202,9 @@ module Axn
           output_tokens: 0,
           input_tokens: 0,
           prompt_tokens: 0,
+          thinking_tokens: nil,
+          server_tool_use: nil,
+          finish_reason: nil,
           cost: 0.0,
           cost_breakdown: nil,
           stubbed: true,
@@ -214,6 +230,22 @@ module Axn
       memo def token_usage = chat.tokens
       memo def cost_breakdown = chat.cost
 
+      # A truncated or filtered response is not an answer: returning it as a success hands callers
+      # partial text (or, with schema:, a misleading JSON parse error). Checked before
+      # parsed_response for that reason. Usage, cost and the raw message are still exposed, since
+      # the call was paid for.
+      def fail_on_incomplete_response!(message, usage)
+        reason =
+          if message&.max_tokens?
+            "Response was cut off by the output token limit before it finished"
+          elsif message&.content_filtered?
+            "Response was blocked by the provider's content filter"
+          end
+        return unless reason
+
+        fail!(reason, **usage, raw_message: message, transcript: transcript_entries, finish_reason: message.finish_reason)
+      end
+
       def usage_exposures
         total = total_input_tokens
         {
@@ -222,6 +254,8 @@ module Axn
           cache_read_tokens: token_usage.cache_read,
           cache_write_tokens: token_usage.cache_write,
           output_tokens: token_usage.output,
+          thinking_tokens: token_usage.thinking,
+          server_tool_use: token_usage.server_tool_use,
           input_tokens: token_usage.input,
           prompt_tokens: total,
           cost_breakdown:,
