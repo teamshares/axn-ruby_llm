@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Tool parameters now carry axn's residue descriptions.** When an input constraint can't be expressed exactly in JSON Schema (a conditional validator, a `format:` pattern with no exact ECMA equivalent, a `model:` lookup), axn core describes it in that property's `description`. Wrapped tools send that text to every provider unchanged, nested properties included. This needs an axn release that ships `input_schema_residues`; until then the gem's Gemfile tracks axn `main`.
+
 ## [0.4.0] - 2026-09-25
 
 `Ask` now covers all of `RubyLLM::Chat`'s settings, plus attachments, seeded history, streaming, and
