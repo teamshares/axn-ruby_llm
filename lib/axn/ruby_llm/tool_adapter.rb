@@ -89,8 +89,12 @@ module Axn
         # because reject_opaque_exposed_values being on doesn't mean THIS failure is an opaque
         # rejection -- it could equally be a colliding key, a non-finite Float, or a gem bug.
         #
+        # The action is named by `resolved_axn_name` (axn core), not raw `#{axn_class}`: Class#to_s does
+        # NOT dispatch through an overridden `.name`, so a class with no assigned constant -- e.g. one
+        # built via Axn::Factory.build -- would otherwise show as `#<Class:0x...>`.
+        #
         # The whole hint is built and logged INSIDE a best_effort: `axn_class` is caller code, and
-        # interpolating it (a hostile/buggy #to_s) must not raise out of `on_error` -- `guard_tool_response`
+        # a hostile/buggy `resolved_axn_name` must not raise out of `on_error` -- `guard_tool_response`
         # reports and re-raises an on_error failure rather than substituting a response, so a raise
         # here would cost the tool its error response entirely. Deliberately a SEPARATE best_effort
         # from the guard's own on_exception report: a broken configured logger must not suppress that
@@ -100,8 +104,8 @@ module Axn
           Axn::Extensions.best_effort("logging a tool serialization failure hint") do
             hint = if Axn::RubyLLM.resolve_override_for(axn_class, :reject_opaque_exposed_values)
                      " (if this is an opaque-value rejection: reject_opaque_exposed_values resolved true for " \
-                       "#{axn_class} — unset it on the action via `configure(:ruby_llm)`, or gem-wide via " \
-                       "`Axn::RubyLLM.config.reject_opaque_exposed_values = false`, whichever is set)"
+                       "#{axn_class.resolved_axn_name} — unset it on the action via `configure(:ruby_llm)`, " \
+                       "or gem-wide via `Axn::RubyLLM.config.reject_opaque_exposed_values = false`, whichever is set)"
                    else
                      ""
                    end
