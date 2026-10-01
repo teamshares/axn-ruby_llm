@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### ⚠️ Breaking changes
+
+- **Ruby 3.2 is no longer supported; the gem now requires Ruby >= 3.3.** Ruby 3.2 is end-of-life, and axn core dropped it too. CI now runs Ruby 3.3, 3.4 and 4.0. Upgrade Ruby before upgrading the gem.
+
 ### Added
 
 - **Tool parameters now carry axn's residue descriptions.** When an input constraint can't be expressed exactly in JSON Schema (a conditional validator, a `format:` pattern with no exact ECMA equivalent, a `model:` lookup), axn core describes it in that property's `description`. Wrapped tools send that text to every provider unchanged, nested properties included. This needs an axn release that ships `input_schema_residues`; until then the gem's Gemfile tracks axn `main`.
