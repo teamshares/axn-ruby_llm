@@ -94,7 +94,7 @@ RSpec.describe "input_schema residue descriptions on the provider wire" do
   end
 
   it "has a fixture whose residues land at the top level and nested (so the comparison is not vacuous)" do
-    paths = with_residues.input_schema_residues.map(&:path)
+    paths = with_residues.input_schema_residues.map(&:path).uniq
     expect(paths).to contain_exactly([:code], [:slug], %i[meta count], [:company_id])
 
     rendered = descriptions(core_schema(with_residues))
